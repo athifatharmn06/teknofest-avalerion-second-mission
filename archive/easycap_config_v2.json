@@ -1,0 +1,62 @@
+{
+  "description": "Konfigurasi V2 Ultra Enhancer untuk EasyCap VRX (UAV Nadir Camera - Deteksi Terpal Biru & Merah)",
+  "preset": "ULTRA_TARP_V2",
+  "camera": {
+    "index": 1,
+    "width": 720,
+    "height": 576,
+    "fps": 30,
+    "fourcc": "MJPG",
+    "buffer_size": 1,
+    "comment": "Index 1 adalah EasyCap VRX (Index 0 adalah WebCam internal Windows)"
+  },
+  "crop": {
+    "top": 8,
+    "bottom": 8,
+    "left": 10,
+    "right": 10
+  },
+  "deinterlace": {
+    "enabled": true,
+    "mode": "bob",
+    "interpolation": "cubic"
+  },
+  "anti_moire": {
+    "enabled": true,
+    "filter_size": 5,
+    "coring_threshold": 6,
+    "comment": "Menghapus garis diagonal / gelombang RF 5.8GHz pada dinding dan lapangan"
+  },
+  "luma_smoothing": {
+    "enabled": true,
+    "edge_threshold": 10
+  },
+  "denoise": {
+    "chroma_strength": 9,
+    "temporal_denoise": true,
+    "temporal_alpha": 0.25
+  },
+  "clahe": {
+    "enabled": true,
+    "clip_limit": 1.5,
+    "grid_size": 8
+  },
+  "sharpen": {
+    "enabled": true,
+    "amount": 1.45,
+    "radius": 1.0,
+    "coring_threshold": 7
+  },
+  "color": {
+    "auto_white_balance": true,
+    "chroma_boost": 1.40,
+    "selective_target_boost": true,
+    "contrast": 1.12,
+    "brightness": 1,
+    "gamma": 1.04
+  },
+  "output": {
+    "resize_width": 640,
+    "resize_height": 480
+  }
+}

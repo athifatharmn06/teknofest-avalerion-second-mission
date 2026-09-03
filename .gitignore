@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large Video Files (GitHub limit is 100MB; video files should not be tracked)
+*.avi
+*.mp4
+*.mkv
+*.mov
+*.ts
+
+# Video and Image Folders content (keep the folders via .gitkeep)
+vid_input/*
+!vid_input/.gitkeep
+video_rec/*
+!video_rec/.gitkeep
+detected_proof/*
+!detected_proof/.gitkeep
+
+# Environments & IDEs
+.env
+.venv
+env/
+venv/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,56 @@
+{
+  "description": "Konfigurasi Optimal Deteksi Terpal Biru & Merah Teknofest (Kamera Bawah UAV)",
+  "preset": "TARP_DETECTION",
+  "camera": {
+    "index": 0,
+    "width": 720,
+    "height": 576,
+    "fps": 30,
+    "fourcc": "MJPG",
+    "buffer_size": 1
+  },
+  "crop": {
+    "top": 8,
+    "bottom": 8,
+    "left": 10,
+    "right": 10
+  },
+  "deinterlace": {
+    "enabled": true,
+    "mode": "bob"
+  },
+  "luma_smoothing": {
+    "enabled": true,
+    "edge_threshold": 10,
+    "comment": "Menghapus bintik/grain pada permukaan tanpa mengaburkan garis tepi terpal"
+  },
+  "denoise": {
+    "chroma_strength": 9,
+    "temporal_denoise": true,
+    "temporal_alpha": 0.25
+  },
+  "clahe": {
+    "enabled": true,
+    "clip_limit": 1.35,
+    "grid_size": 8,
+    "comment": "Clip limit rendah (1.35) agar kontras naik TANPA meledakkan noise/grain"
+  },
+  "sharpen": {
+    "enabled": true,
+    "amount": 1.35,
+    "radius": 1.0,
+    "coring_threshold": 8,
+    "comment": "Coring threshold tinggi (8) agar hanya garis sudut terpal yang dipertajam"
+  },
+  "color": {
+    "auto_white_balance": true,
+    "chroma_boost": 1.35,
+    "contrast": 1.10,
+    "brightness": 0,
+    "gamma": 1.02
+  },
+  "output": {
+    "resize_width": 640,
+    "resize_height": 480
+  }
+}
