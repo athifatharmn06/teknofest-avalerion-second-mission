@@ -149,11 +149,11 @@ Di layar GUI terdapat panel samping kanan dengan **5 Tombol Uji Interaktif** yan
 | **`[3] MANUAL DROP BIRU`** | **`[3]`** | Memicu pelepasan manual Payload Biru (Servo 8 $\rightarrow$ 1100 PWM). |
 | **`[4] RESET SERVO BIRU`** | **`[4]`** | Mengembalikan Servo Biru ke posisi kunci (Servo 8 $\rightarrow$ 2100 PWM). |
 | **`[X] RESET SEMUA SERVO`** | **`[X]`** | Mengembalikan kedua servo secara bersamaan ke posisi standby. |
+| **`TOGGLE ENHANCER` (Card)** | **`[SPACE]`** | **Toggle Video Enhancer ON/OFF** (Default: **NONAKTIF / Raw Camera**). Status live terlihat pada badge video & kartu sidebar. |
 | **Toggle Rekam Video** | **`[R]`** | **Mulai / Hentikan Rekam Video Full** ke folder `video_rec/` (`rec_YYYYMMDD_HHMMSS.mp4`). |
 | **Toggle Waypoint Guard** | **`[W]`** | Mengaktifkan / menonaktifkan batasan Waypoint (Bypass ke semua WP). |
 | **Toggle Flight Safeguards** | **`[F]`** | Mengaktifkan / menonaktifkan Guard Mode AUTO & Takeoff (Bypass untuk bench test di darat). |
 | **Toggle Level Guard** | **`[G]`** | Mengaktifkan / menonaktifkan Attitude Level Guard (Bypass untuk bench test). |
-| **Toggle Video Enhancer** | **`[SPACE]`** | Mengaktifkan / menonaktifkan filter pembersih EasyCap VRX secara live. |
 | **Keluar** | **`[Q]` / `[ESC]`** | Menutup program dan melepaskan port secara aman. |
 
 ---

@@ -306,7 +306,7 @@ class DetectionProofLogger:
 class CleanVideoEnhancer:
     def __init__(self):
         self.clahe = cv2.createCLAHE(clipLimit=1.4, tileGridSize=(8, 8))
-        self.enabled = True
+        self.enabled = False  # Default: NONAKTIF (Raw Camera), toggle dengan [SPACE]
 
     def process(self, frame: np.ndarray) -> np.ndarray:
         if not self.enabled or frame is None or frame.size == 0:
@@ -632,15 +632,16 @@ def preprocess_yolo(frame):
 # CLASS: TeknofestDualDroppingMission
 # ==============================================================================
 class TeknofestDualDroppingMission:
-    def __init__(self, serial_port="COM7", baud_rate=57600, camera_index=DEFAULT_CAMERA_INDEX, model_path=YOLO_MODEL_PATH, is_sim=False):
+    def __init__(self, serial_port="COM7", baud_rate=57600, camera_index=DEFAULT_CAMERA_INDEX, model_path=YOLO_MODEL_PATH, is_sim=False, enable_enhancer=False):
         self.serial_port = serial_port
         self.baud_rate = baud_rate
         self.camera_index = camera_index
         self.model_path = model_path
         self.is_sim = is_sim
 
-        # Enhancer
+        # Enhancer (Default: Nonaktif / Raw Camera, tekan SPACE untuk aktifkan)
         self.enhancer = CleanVideoEnhancer()
+        self.enhancer.enabled = bool(enable_enhancer)
 
         # Telemetry Bridge
         self.bridge = None
@@ -1130,6 +1131,19 @@ class TeknofestDualDroppingMission:
             cv2.circle(canvas, (24, 24), 8, rec_c, -1)
             cv2.putText(canvas, f"REC {self.recorder.get_status_str()}", (38, 30), cv2.FONT_HERSHEY_DUPLEX, 0.55, (0, 0, 255), 1, cv2.LINE_AA)
 
+        # Badge Status Video Enhancer di Pojok Kiri Atas Frame Video
+        enh_badge_y = 52 if self.recorder.is_recording else 16
+        enh_active = self.enhancer.enabled
+        pill_w = 205
+        pill_h = 24
+        cv2.rectangle(canvas, (14, enh_badge_y), (14 + pill_w, enh_badge_y + pill_h), (20, 20, 20), -1)
+        cv2.rectangle(canvas, (14, enh_badge_y), (14 + pill_w, enh_badge_y + pill_h), (0, 255, 120) if enh_active else (75, 75, 75), 1)
+        dot_c = (0, 255, 120) if enh_active else (110, 110, 110)
+        cv2.circle(canvas, (25, enh_badge_y + 12), 4, dot_c, -1)
+        enh_badge_txt = "ENHANCER: ON [SPACE]" if enh_active else "ENHANCER: OFF [SPACE]"
+        enh_badge_col = (0, 255, 180) if enh_active else (180, 180, 180)
+        cv2.putText(canvas, enh_badge_txt, (36, enh_badge_y + 16), cv2.FONT_HERSHEY_DUPLEX, 0.38, enh_badge_col, 1, cv2.LINE_AA)
+
         # Badge FPS Counter Modern di Pojok Kanan Atas Area Video
         draw_fps_badge(canvas, fps=self.pipeline_fps, latency_ms=self.proc_ms, top_right_x=scaled_w - 14, top_y=14)
 
@@ -1207,52 +1221,84 @@ class TeknofestDualDroppingMission:
         b_status = f"DROPPED ({self.servo_blue_pwm} PWM)" if self.payload_blue_dropped else f"STANDBY ({self.servo_blue_pwm} PWM)"
         cv2.putText(canvas, b_status, (p_x + 18, b_box_y + 38), cv2.FONT_HERSHEY_DUPLEX, 0.48, (255, 120, 0) if self.payload_blue_dropped else (0, 255, 0), 1)
 
-        # 6. 5 TOMBOL UJI INTERAKTIF
+        # 6. KOTAK STATUS & TOGGLE VIDEO ENHANCER (Tombol Interaktif [SPACE])
         self.buttons = []
-        btn_y = b_box_y + 56
-        btn_h = 30
+        enh_box_y = b_box_y + 56
+        enh_box_h = 42
+        enh_w = panel_w - 20
+        enh_active = self.enhancer.enabled
+
+        enh_bg = (18, 48, 22) if enh_active else (34, 34, 34)
+        enh_border = (0, 255, 120) if enh_active else (75, 75, 75)
+        cv2.rectangle(canvas, (p_x + 10, enh_box_y), (p_x + panel_w - 10, enh_box_y + enh_box_h), enh_bg, -1)
+        cv2.rectangle(canvas, (p_x + 10, enh_box_y), (p_x + panel_w - 10, enh_box_y + enh_box_h), enh_border, 1)
+
+        dot_c = (0, 255, 120) if enh_active else (120, 120, 120)
+        cv2.circle(canvas, (p_x + 24, enh_box_y + 16), 5, dot_c, -1)
+
+        enh_title = "ENHANCER: AKTIF (CLEAN V2)" if enh_active else "ENHANCER: NONAKTIF (RAW)"
+        enh_title_col = (0, 255, 180) if enh_active else (200, 200, 200)
+        cv2.putText(canvas, enh_title, (p_x + 36, enh_box_y + 20), cv2.FONT_HERSHEY_DUPLEX, 0.42, enh_title_col, 1, cv2.LINE_AA)
+
+        enh_sub = "[SPACE] / Klik -> Matikan Filter" if enh_active else "[SPACE] / Klik -> Aktifkan Filter"
+        enh_sub_col = (160, 240, 180) if enh_active else (0, 210, 255)
+        cv2.putText(canvas, enh_sub, (p_x + 18, enh_box_y + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.35, enh_sub_col, 1, cv2.LINE_AA)
+
+        # Daftarkan tombol interaktif untuk Enhancer
+        self.buttons.append({
+            "name": "TOGGLE_ENHANCER",
+            "rect": (p_x + 10, enh_box_y, enh_w, enh_box_h),
+            "label": "[SPACE] TOGGLE ENHANCER",
+            "bg": enh_bg,
+            "fg": enh_title_col
+        })
+
+        # 7. 5 TOMBOL UJI INTERAKTIF SERVO
+        btn_y = enh_box_y + enh_box_h + 8
+        btn_h = 28
         btn_w = panel_w - 20
+        spacing = 33
 
         # Tombol 1: Manual Drop Merah
         b1 = {"name": "DROP_RED", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[1] MANUAL DROP MERAH", "bg": (0, 0, 160), "fg": (255, 255, 255)}
         self.buttons.append(b1)
         cv2.rectangle(canvas, (b1["rect"][0], b1["rect"][1]), (b1["rect"][0] + b1["rect"][2], b1["rect"][1] + b1["rect"][3]), b1["bg"], -1)
         cv2.rectangle(canvas, (b1["rect"][0], b1["rect"][1]), (b1["rect"][0] + b1["rect"][2], b1["rect"][1] + b1["rect"][3]), (255, 255, 255), 1)
-        cv2.putText(canvas, b1["label"], (b1["rect"][0] + 15, b1["rect"][1] + 20), cv2.FONT_HERSHEY_DUPLEX, 0.42, b1["fg"], 1, cv2.LINE_AA)
+        cv2.putText(canvas, b1["label"], (b1["rect"][0] + 15, b1["rect"][1] + 19), cv2.FONT_HERSHEY_DUPLEX, 0.40, b1["fg"], 1, cv2.LINE_AA)
 
         # Tombol 2: Reset Merah
-        btn_y += 35
+        btn_y += spacing
         b2 = {"name": "RESET_RED", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[2] RESET SERVO MERAH", "bg": (55, 55, 55), "fg": (200, 200, 200)}
         self.buttons.append(b2)
         cv2.rectangle(canvas, (b2["rect"][0], b2["rect"][1]), (b2["rect"][0] + b2["rect"][2], b2["rect"][1] + b2["rect"][3]), b2["bg"], -1)
         cv2.rectangle(canvas, (b2["rect"][0], b2["rect"][1]), (b2["rect"][0] + b2["rect"][2], b2["rect"][1] + b2["rect"][3]), (160, 160, 160), 1)
-        cv2.putText(canvas, b2["label"], (b2["rect"][0] + 15, b2["rect"][1] + 20), cv2.FONT_HERSHEY_DUPLEX, 0.42, b2["fg"], 1, cv2.LINE_AA)
+        cv2.putText(canvas, b2["label"], (b2["rect"][0] + 15, b2["rect"][1] + 19), cv2.FONT_HERSHEY_DUPLEX, 0.40, b2["fg"], 1, cv2.LINE_AA)
 
         # Tombol 3: Manual Drop Biru
-        btn_y += 35
+        btn_y += spacing
         b3 = {"name": "DROP_BLUE", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[3] MANUAL DROP BIRU", "bg": (160, 80, 0), "fg": (255, 255, 255)}
         self.buttons.append(b3)
         cv2.rectangle(canvas, (b3["rect"][0], b3["rect"][1]), (b3["rect"][0] + b3["rect"][2], b3["rect"][1] + b3["rect"][3]), b3["bg"], -1)
         cv2.rectangle(canvas, (b3["rect"][0], b3["rect"][1]), (b3["rect"][0] + b3["rect"][2], b3["rect"][1] + b3["rect"][3]), (255, 255, 255), 1)
-        cv2.putText(canvas, b3["label"], (b3["rect"][0] + 15, b3["rect"][1] + 20), cv2.FONT_HERSHEY_DUPLEX, 0.42, b3["fg"], 1, cv2.LINE_AA)
+        cv2.putText(canvas, b3["label"], (b3["rect"][0] + 15, b3["rect"][1] + 19), cv2.FONT_HERSHEY_DUPLEX, 0.40, b3["fg"], 1, cv2.LINE_AA)
 
         # Tombol 4: Reset Biru
-        btn_y += 35
+        btn_y += spacing
         b4 = {"name": "RESET_BLUE", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[4] RESET SERVO BIRU", "bg": (55, 55, 55), "fg": (200, 200, 200)}
         self.buttons.append(b4)
         cv2.rectangle(canvas, (b4["rect"][0], b4["rect"][1]), (b4["rect"][0] + b4["rect"][2], b4["rect"][1] + b4["rect"][3]), b4["bg"], -1)
         cv2.rectangle(canvas, (b4["rect"][0], b4["rect"][1]), (b4["rect"][0] + b4["rect"][2], b4["rect"][1] + b4["rect"][3]), (160, 160, 160), 1)
-        cv2.putText(canvas, b4["label"], (b4["rect"][0] + 15, b4["rect"][1] + 20), cv2.FONT_HERSHEY_DUPLEX, 0.42, b4["fg"], 1, cv2.LINE_AA)
+        cv2.putText(canvas, b4["label"], (b4["rect"][0] + 15, b4["rect"][1] + 19), cv2.FONT_HERSHEY_DUPLEX, 0.40, b4["fg"], 1, cv2.LINE_AA)
 
         # Tombol 5: Reset All (Shortcut [X])
-        btn_y += 35
+        btn_y += spacing
         b5 = {"name": "RESET_ALL", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[X] RESET SEMUA SERVO", "bg": (45, 45, 75), "fg": (220, 220, 255)}
         self.buttons.append(b5)
         cv2.rectangle(canvas, (b5["rect"][0], b5["rect"][1]), (b5["rect"][0] + b5["rect"][2], b5["rect"][1] + b5["rect"][3]), b5["bg"], -1)
         cv2.rectangle(canvas, (b5["rect"][0], b5["rect"][1]), (b5["rect"][0] + b5["rect"][2], b5["rect"][1] + b5["rect"][3]), (180, 180, 220), 1)
-        cv2.putText(canvas, b5["label"], (b5["rect"][0] + 15, b5["rect"][1] + 20), cv2.FONT_HERSHEY_DUPLEX, 0.42, b5["fg"], 1, cv2.LINE_AA)
+        cv2.putText(canvas, b5["label"], (b5["rect"][0] + 15, b5["rect"][1] + 19), cv2.FONT_HERSHEY_DUPLEX, 0.40, b5["fg"], 1, cv2.LINE_AA)
 
-        # 7. FOOTER TELEMETRI & STATUS BANNER
+        # 8. FOOTER TELEMETRI & STATUS BANNER
         hud_h = 36
         tot_w = scaled_w + panel_w
         hud_bar = np.zeros((hud_h, tot_w, 3), dtype=np.uint8)
@@ -1261,7 +1307,8 @@ class TeknofestDualDroppingMission:
         msg_c = self.bridge.msg_count if self.bridge else 0
         guards_status = f"Guards: [AUTO:{'ON' if AUTO_MODE_GUARD_ENABLED else 'OFF'}, TO:{'ON' if TAKEOFF_GUARD_ENABLED else 'OFF'}, LVL:{'ON' if LEVEL_GUARD_ENABLED else 'OFF'}, WP:{'ON' if WAYPOINT_GUARD_ENABLED else 'OFF'}]"
         model_name = Path(self.model_path).name
-        info_txt = f"FPS: {self.pipeline_fps:4.1f} | Lat: {self.proc_ms:3.0f}ms | Telem: {msg_c} msgs | {guards_status} | {model_name}"
+        enh_status = "ON" if self.enhancer.enabled else "OFF"
+        info_txt = f"FPS: {self.pipeline_fps:4.1f} | Lat: {self.proc_ms:3.0f}ms | Enhancer: {enh_status} (SPACE) | Telem: {msg_c} msgs | {guards_status} | {model_name}"
         cv2.putText(hud_bar, info_txt, (15, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1, cv2.LINE_AA)
 
         if time.time() < self.status_timer and self.status_banner:
@@ -1291,7 +1338,12 @@ class TeknofestDualDroppingMission:
                         self.reset_servo_blue()
                     elif name == "RESET_ALL":
                         self.reset_all_servos()
+                    elif name == "TOGGLE_ENHANCER":
+                        self.enhancer.enabled = not self.enhancer.enabled
+                        self.status_banner = f">> Enhancer: {'AKTIF (CLEAN V2)' if self.enhancer.enabled else 'NONAKTIF (RAW BYPASS)'}"
+                        self.status_timer = time.time() + 2.5
                     break
+
 
     def run(self):
         global WAYPOINT_GUARD_ENABLED, AUTO_MODE_GUARD_ENABLED, TAKEOFF_GUARD_ENABLED, LEVEL_GUARD_ENABLED
@@ -1304,6 +1356,7 @@ class TeknofestDualDroppingMission:
         print(" SISTEM AUTONOMI DUAL DROPPING TEKNOFEST AKTIF:")
         target_wp_disp = normalize_waypoints(TARGET_WAYPOINTS)
         print(f"  -> Target Waypoint : {target_wp_disp} {'[AKTIF]' if WAYPOINT_GUARD_ENABLED else '[BYPASS]'}")
+        print(f"  -> Video Enhancer  : {'[AKTIF (Clean V2)]' if self.enhancer.enabled else '[NONAKTIF / RAW (Tekan SPACE utk aktifkan)]'}")
         print("  [1]         : Trigger Manual Drop Merah (Servo 7 -> Drop PWM)")
         print("  [2]         : Reset Servo Merah (Servo 7 -> Start PWM)")
         print("  [3]         : Trigger Manual Drop Biru (Servo 8 -> Drop PWM)")
@@ -1313,7 +1366,7 @@ class TeknofestDualDroppingMission:
         print("  [W]         : Toggle Waypoint Guard ON/OFF")
         print("  [F]         : Toggle Flight Safeguards (AUTO + Takeoff Guard ON/OFF)")
         print("  [G]         : Toggle Attitude Level Guard ON/OFF")
-        print("  [SPACE]     : Toggle Video Enhancer ON/OFF")
+        print("  [SPACE]     : Toggle Video Enhancer ON/OFF (Default: NONAKTIF)")
         print("  [Q] / [ESC] : Keluar")
         print("=" * 65 + "\n")
 
@@ -1386,7 +1439,7 @@ class TeknofestDualDroppingMission:
                     self.status_timer = time.time() + 2.5
                 elif key == 32: # SPACE
                     self.enhancer.enabled = not self.enhancer.enabled
-                    self.status_banner = f">> Enhancer: {'AKTIF' if self.enhancer.enabled else 'NONAKTIF'}"
+                    self.status_banner = f">> Enhancer: {'AKTIF (CLEAN V2)' if self.enhancer.enabled else 'NONAKTIF (RAW BYPASS)'}"
                     self.status_timer = time.time() + 2.5
 
         finally:
@@ -1521,6 +1574,7 @@ if __name__ == "__main__":
     parser.add_argument("--video", "-v", default=None, help="Path berkas video pengujian")
     parser.add_argument("--model", "-m", type=str, default=None, help="Path berkas model YOLO (.onnx)")
     parser.add_argument("--wp", "-w", type=str, default=None, help="Nomor Waypoint target deteksi & drop (misal: 3 atau 3,4 atau 3-5)")
+    parser.add_argument("--enhance", action="store_true", default=False, help="Aktifkan Video Enhancer sejak awal (default: False / Raw Camera)")
     parser.add_argument("--sim", action="store_true", help="Jalankan dalam mode simulasi tanpa serial")
     args = parser.parse_args()
 
@@ -1536,7 +1590,7 @@ if __name__ == "__main__":
     if args.sim:
         cam_idx = cam_input if cam_input is not None else DEFAULT_CAMERA_INDEX
         model_path = model_input if model_input is not None else YOLO_MODEL_PATH
-        runner = TeknofestDualDroppingMission(is_sim=True, camera_index=cam_idx, model_path=model_path)
+        runner = TeknofestDualDroppingMission(is_sim=True, camera_index=cam_idx, model_path=model_path, enable_enhancer=args.enhance)
     else:
         serial_port = args.port
         baud_rate = args.baud
@@ -1555,7 +1609,8 @@ if __name__ == "__main__":
             baud_rate=baud_rate,
             camera_index=cam_idx,
             model_path=model_path,
-            is_sim=False
+            is_sim=False,
+            enable_enhancer=args.enhance
         )
 
     runner.run()
