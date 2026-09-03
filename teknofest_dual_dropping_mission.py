@@ -88,10 +88,34 @@ PWM_BLUE_DROP = 1100           # PWM Release / Buka Kunci Dropping
 AUTO_MODE_GUARD_ENABLED = True     # Hanya boleh drop jika Flight Controller di Mode AUTO
 TAKEOFF_GUARD_ENABLED = True       # Hanya boleh drop jika ketinggian sudah mencukupi (Takeoff Complete)
 LEVEL_GUARD_ENABLED = True         # Hanya boleh drop jika pesawat datar (+/- 10 deg Roll, +/- 8 deg Pitch)
+WAYPOINT_GUARD_ENABLED = True      # True: Mulai deteksi & drop HANYA di Waypoint target, False: Bypass
+TARGET_WAYPOINTS = [3]             # Nomor Waypoint target (Contoh: [3] atau [3, 4] atau range [3, 4, 5])
 MIN_TAKEOFF_ALT_METERS = 30.0      # Ketinggian minimal lepas landas (30 meter AGL / di atas 30%)
 TAKEOFF_ALT_PERCENT = 30.0         # Batas ambang minimal: 30% dari Target Ketinggian Misi
 MAX_ABS_ROLL_DEG = 10.0            # Toleransi Roll Maksimal (+/- 10 Derajat)
 MAX_ABS_PITCH_DEG = 8.0            # Toleransi Pitch Maksimal (+/- 8 Derajat)
+
+
+def normalize_waypoints(wps):
+    """Mengubah input waypoint (int, list, tuple, str) menjadi list integer yang valid."""
+    if isinstance(wps, int):
+        return [wps]
+    if isinstance(wps, (list, tuple, set)):
+        return [int(x) for x in wps]
+    if isinstance(wps, str):
+        res = []
+        for part in wps.split(","):
+            part = part.strip()
+            if "-" in part:
+                try:
+                    s, e = part.split("-", 1)
+                    res.extend(range(int(s.strip()), int(e.strip()) + 1))
+                except Exception:
+                    pass
+            elif part.isdigit():
+                res.append(int(part))
+        return res if res else [3]
+    return [3]
 
 # -- YOLO & VISION CONFIGURATION
 YOLO_MODEL_PATH = "v1_gazbmodel_exp.onnx"
@@ -871,18 +895,36 @@ class TeknofestDualDroppingMission:
             if not pitch_ok: reason.append(f"Pitch {pitch_deg:+.1f} > +/-{MAX_ABS_PITCH_DEG:.0f}")
             return False, f"TILTED ({', '.join(reason)}) [HOLD]"
 
+    def is_target_waypoint(self):
+        """
+        Guard Waypoint Misi:
+        Mengembalikan True jika pesawat sedang berada pada Waypoint misi yang ditentukan.
+        """
+        if not WAYPOINT_GUARD_ENABLED or self.bridge is None or not self.bridge.has_heartbeat:
+            return True, "BYPASS (No Telemetry / Disabled)"
+
+        cur_wp = getattr(self.bridge, 'mission_seq', 0)
+        target_wps = normalize_waypoints(TARGET_WAYPOINTS)
+
+        if cur_wp in target_wps:
+            return True, f"WP {cur_wp} (Target: {target_wps}) [OK]"
+        else:
+            return False, f"WP {cur_wp} (Target: {target_wps}) [HOLD]"
+
     def check_all_safeguards(self):
         """
-        Evaluasi gabungan 3 lapis safeguards:
+        Evaluasi gabungan 4 lapis safeguards:
         1. Mode AUTO
-        2. Takeoff Complete
-        3. Level Flight
+        2. Takeoff Complete (Altitude >= 30m / 30%)
+        3. Level Flight (+/- 10 deg Roll, +/- 8 deg Pitch)
+        4. Target Waypoint
         """
         auto_ok, auto_desc = self.is_auto_mode()
         to_ok, to_desc = self.is_takeoff_complete()
         lvl_ok, lvl_desc = self.is_aircraft_level()
-        all_ok = auto_ok and to_ok and lvl_ok
-        return all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc
+        wp_ok, wp_desc = self.is_target_waypoint()
+        all_ok = auto_ok and to_ok and lvl_ok and wp_ok
+        return all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc, wp_ok, wp_desc
 
     # ==========================================================================
     # COLOR GUARD & VISION INFERENCE
@@ -910,6 +952,29 @@ class TeknofestDualDroppingMission:
             self.new_frame = False
 
         h, w = frame.shape[:2]
+
+        # 0. Cek Waypoint Guard (Mulai deteksi HANYA jika berada di Waypoint target)
+        wp_ok, wp_desc = self.is_target_waypoint()
+        if WAYPOINT_GUARD_ENABLED and not wp_ok:
+            self.consecutive_blue = 0
+            self.consecutive_red = 0
+
+            # Indikator HUD Standby Waypoint di video viewport
+            target_str = str(normalize_waypoints(TARGET_WAYPOINTS))
+            cur_wp = self.bridge.mission_seq if self.bridge else 0
+            hud_txt = f"STANDBY WP GUARD: Menunggu WP Target {target_str} (Saat ini: WP {cur_wp})"
+            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
+            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 165, 255), 1)
+            cv2.putText(frame, hud_txt, (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.44, (0, 215, 255), 1, cv2.LINE_AA)
+
+            # Tetap update counter frame & rekam jika [R] aktif
+            self.frame_counter += 1
+            if self.recorder.is_recording:
+                self.recorder.write(frame)
+
+            self.proc_ms = (time.time() - t_start) * 1000.0
+            return frame
+
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         # Pre-check Color Guard
@@ -976,22 +1041,23 @@ class TeknofestDualDroppingMission:
                 if detected_red is None or conf > detected_red["conf"]:
                     detected_red = {"conf": conf, "box": (x1, y1, x2, y2), "center": center}
 
-        # 3 Lapis Flight Safeguards (AUTO, TAKEOFF, LEVEL)
-        all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc = self.check_all_safeguards()
+        # 4 Lapis Flight Safeguards (AUTO, TAKEOFF, LEVEL, WAYPOINT)
+        all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc, wp_ok, wp_desc = self.check_all_safeguards()
 
-        # -- CROSS-DROP LOGIC (Zero Mistake + 3 Safeguards: AUTO, TAKEOFF, LEVEL)
+        # -- CROSS-DROP LOGIC (Zero Mistake + 4 Safeguards: AUTO, TAKEOFF, LEVEL, WAYPOINT)
         # 1. Target Square Blue -> Trigger Payload Merah
         if detected_blue is not None:
             self.consecutive_blue += 1
             self.last_blue_info = detected_blue
             if self.consecutive_blue >= MIN_CONSECUTIVE_FRAMES and not self.payload_red_dropped:
                 if all_ok:
-                    self.trigger_drop_red(f"Conf: {detected_blue['conf'] * 100:.0f}% | {auto_desc} | {to_desc} | {lvl_desc}")
+                    self.trigger_drop_red(f"Conf: {detected_blue['conf'] * 100:.0f}% | {auto_desc} | {to_desc} | {lvl_desc} | {wp_desc}")
                 else:
                     reasons = []
                     if not auto_ok: reasons.append(auto_desc)
                     if not to_ok: reasons.append(to_desc)
                     if not lvl_ok: reasons.append(lvl_desc)
+                    if not wp_ok: reasons.append(wp_desc)
                     self.status_banner = f"HOLD DROP MERAH: {', '.join(reasons)}"
                     self.status_timer = time.time() + 0.5
         else:
@@ -1003,12 +1069,13 @@ class TeknofestDualDroppingMission:
             self.last_red_info = detected_red
             if self.consecutive_red >= MIN_CONSECUTIVE_FRAMES and not self.payload_blue_dropped:
                 if all_ok:
-                    self.trigger_drop_blue(f"Conf: {detected_red['conf'] * 100:.0f}% | {auto_desc} | {to_desc} | {lvl_desc}")
+                    self.trigger_drop_blue(f"Conf: {detected_red['conf'] * 100:.0f}% | {auto_desc} | {to_desc} | {lvl_desc} | {wp_desc}")
                 else:
                     reasons = []
                     if not auto_ok: reasons.append(auto_desc)
                     if not to_ok: reasons.append(to_desc)
                     if not lvl_ok: reasons.append(lvl_desc)
+                    if not wp_ok: reasons.append(wp_desc)
                     self.status_banner = f"HOLD DROP BIRU: {', '.join(reasons)}"
                     self.status_timer = time.time() + 0.5
         else:
@@ -1024,12 +1091,12 @@ class TeknofestDualDroppingMission:
         # 3. Simpan foto bukti deteksi ke folder detected_proof/<session_start>/ tanpa jeda
         if detected_blue is not None:
             rel_alt = self.bridge.relative_alt if self.bridge else 0.0
-            info = f"Alt:{rel_alt:.1f}m | {auto_desc} | {lvl_desc}"
+            info = f"Alt:{rel_alt:.1f}m | {auto_desc} | {lvl_desc} | {wp_desc}"
             self.proof_logger.log_detection(frame, "square_blue", detected_blue["conf"], self.frame_counter, info)
 
         if detected_red is not None:
             rel_alt = self.bridge.relative_alt if self.bridge else 0.0
-            info = f"Alt:{rel_alt:.1f}m | {auto_desc} | {lvl_desc}"
+            info = f"Alt:{rel_alt:.1f}m | {auto_desc} | {lvl_desc} | {wp_desc}"
             self.proof_logger.log_detection(frame, "square_red", detected_red["conf"], self.frame_counter, info)
 
         self.proc_ms = (time.time() - t_start) * 1000.0
@@ -1072,32 +1139,36 @@ class TeknofestDualDroppingMission:
         cv2.rectangle(canvas, (p_x, 0), (p_x + panel_w, 42), (38, 38, 38), -1)
         cv2.putText(canvas, "TEKNOFEST MISSION 2", (p_x + 18, 28), cv2.FONT_HERSHEY_DUPLEX, 0.65, (0, 220, 255), 1, cv2.LINE_AA)
 
-        # 2. 3-LAYER FLIGHT SAFEGUARDS CARD (AUTO, TAKEOFF, LEVEL)
+        # 2. 4-LAYER FLIGHT SAFEGUARDS CARD (AUTO, TAKEOFF, LEVEL, WAYPOINT)
         y_pos = 48
-        card_h = 94
-        all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc = self.check_all_safeguards()
+        card_h = 112
+        all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc, wp_ok, wp_desc = self.check_all_safeguards()
 
         cv2.rectangle(canvas, (p_x + 10, y_pos), (p_x + panel_w - 10, y_pos + card_h), (34, 34, 34), -1)
         border_color = (0, 255, 0) if all_ok else (0, 160, 255)
         cv2.rectangle(canvas, (p_x + 10, y_pos), (p_x + panel_w - 10, y_pos + card_h), border_color, 1)
 
-        cv2.putText(canvas, "FLIGHT SAFEGUARDS (3-LAYER):", (p_x + 18, y_pos + 18), cv2.FONT_HERSHEY_DUPLEX, 0.44, (0, 220, 255), 1)
+        cv2.putText(canvas, "FLIGHT SAFEGUARDS (4-LAYER):", (p_x + 18, y_pos + 18), cv2.FONT_HERSHEY_DUPLEX, 0.44, (0, 220, 255), 1)
 
         # Safeguard 1: Flight Mode (AUTO)
         auto_c = (0, 255, 0) if auto_ok else (0, 0, 255)
-        cv2.putText(canvas, f"[1] Mode Flight : {auto_desc}", (p_x + 18, y_pos + 38), cv2.FONT_HERSHEY_SIMPLEX, 0.40, auto_c, 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"[1] Mode Flight : {auto_desc}", (p_x + 18, y_pos + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, auto_c, 1, cv2.LINE_AA)
 
         # Safeguard 2: Takeoff Altitude
         to_c = (0, 255, 0) if to_ok else (0, 165, 255)
-        cv2.putText(canvas, f"[2] Takeoff      : {to_desc}", (p_x + 18, y_pos + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.40, to_c, 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"[2] Takeoff      : {to_desc}", (p_x + 18, y_pos + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.38, to_c, 1, cv2.LINE_AA)
 
         # Safeguard 3: Level Flight
         lvl_c = (0, 255, 0) if lvl_ok else (0, 165, 255)
-        cv2.putText(canvas, f"[3] Attitude     : {lvl_desc}", (p_x + 18, y_pos + 72), cv2.FONT_HERSHEY_SIMPLEX, 0.40, lvl_c, 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"[3] Attitude     : {lvl_desc}", (p_x + 18, y_pos + 68), cv2.FONT_HERSHEY_SIMPLEX, 0.38, lvl_c, 1, cv2.LINE_AA)
+
+        # Safeguard 4: Target Waypoint
+        wp_c = (0, 255, 0) if wp_ok else (0, 165, 255)
+        cv2.putText(canvas, f"[4] Waypoint     : {wp_desc}", (p_x + 18, y_pos + 84), cv2.FONT_HERSHEY_SIMPLEX, 0.38, wp_c, 1, cv2.LINE_AA)
 
         # Summary Badge
         summary_txt = "STATUS: ARMED (SIAP DROPPING)" if all_ok else "STATUS: TERKUNCI (HOLD)"
-        cv2.putText(canvas, summary_txt, (p_x + 18, y_pos + 88), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 255, 0) if all_ok else (0, 140, 255), 1, cv2.LINE_AA)
+        cv2.putText(canvas, summary_txt, (p_x + 18, y_pos + 104), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 255, 0) if all_ok else (0, 140, 255), 1, cv2.LINE_AA)
 
         # 3. RECORDER & PROOF CARD
         y_pos += card_h + 8
@@ -1188,7 +1259,7 @@ class TeknofestDualDroppingMission:
         hud_bar[:] = (18, 18, 18)
 
         msg_c = self.bridge.msg_count if self.bridge else 0
-        guards_status = f"Guards: [AUTO:{'ON' if AUTO_MODE_GUARD_ENABLED else 'OFF'}, TO:{'ON' if TAKEOFF_GUARD_ENABLED else 'OFF'}, LVL:{'ON' if LEVEL_GUARD_ENABLED else 'OFF'}]"
+        guards_status = f"Guards: [AUTO:{'ON' if AUTO_MODE_GUARD_ENABLED else 'OFF'}, TO:{'ON' if TAKEOFF_GUARD_ENABLED else 'OFF'}, LVL:{'ON' if LEVEL_GUARD_ENABLED else 'OFF'}, WP:{'ON' if WAYPOINT_GUARD_ENABLED else 'OFF'}]"
         model_name = Path(self.model_path).name
         info_txt = f"FPS: {self.pipeline_fps:4.1f} | Lat: {self.proc_ms:3.0f}ms | Telem: {msg_c} msgs | {guards_status} | {model_name}"
         cv2.putText(hud_bar, info_txt, (15, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1, cv2.LINE_AA)
@@ -1223,18 +1294,23 @@ class TeknofestDualDroppingMission:
                     break
 
     def run(self):
+        global WAYPOINT_GUARD_ENABLED, AUTO_MODE_GUARD_ENABLED, TAKEOFF_GUARD_ENABLED, LEVEL_GUARD_ENABLED
+
         cv2.namedWindow(GUI_WINDOW_NAME, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(GUI_WINDOW_NAME, 1280, 680)
         cv2.setMouseCallback(GUI_WINDOW_NAME, self.on_mouse_click)
 
         print("\n" + "=" * 65)
         print(" SISTEM AUTONOMI DUAL DROPPING TEKNOFEST AKTIF:")
+        target_wp_disp = normalize_waypoints(TARGET_WAYPOINTS)
+        print(f"  -> Target Waypoint : {target_wp_disp} {'[AKTIF]' if WAYPOINT_GUARD_ENABLED else '[BYPASS]'}")
         print("  [1]         : Trigger Manual Drop Merah (Servo 7 -> Drop PWM)")
         print("  [2]         : Reset Servo Merah (Servo 7 -> Start PWM)")
         print("  [3]         : Trigger Manual Drop Biru (Servo 8 -> Drop PWM)")
         print("  [4]         : Reset Servo Biru (Servo 8 -> Start PWM)")
         print("  [X]         : Reset Semua Servo ke Standby")
         print("  [R]         : Toggle Rekam Video Full (Mulai / Stop Rekam)")
+        print("  [W]         : Toggle Waypoint Guard ON/OFF")
         print("  [F]         : Toggle Flight Safeguards (AUTO + Takeoff Guard ON/OFF)")
         print("  [G]         : Toggle Attitude Level Guard ON/OFF")
         print("  [SPACE]     : Toggle Video Enhancer ON/OFF")
@@ -1293,15 +1369,18 @@ class TeknofestDualDroppingMission:
                     self.reset_all_servos()
                     self.status_banner = ">> SEMUA SERVO DI-RESET KE STANDBY (Tombol [X])"
                     self.status_timer = time.time() + 2.5
+                elif key in [ord('w'), ord('W')]:
+                    WAYPOINT_GUARD_ENABLED = not WAYPOINT_GUARD_ENABLED
+                    target_str = str(normalize_waypoints(TARGET_WAYPOINTS))
+                    self.status_banner = f">> Waypoint Guard: {'AKTIF (' + target_str + ')' if WAYPOINT_GUARD_ENABLED else 'BYPASS (SEMUA WP)'}"
+                    self.status_timer = time.time() + 3.0
                 elif key in [ord('f'), ord('F')]:
-                    global AUTO_MODE_GUARD_ENABLED, TAKEOFF_GUARD_ENABLED
                     new_state = not (AUTO_MODE_GUARD_ENABLED and TAKEOFF_GUARD_ENABLED)
                     AUTO_MODE_GUARD_ENABLED = new_state
                     TAKEOFF_GUARD_ENABLED = new_state
                     self.status_banner = f">> Flight Safeguards (AUTO+TAKEOFF): {'AKTIF' if new_state else 'BYPASS (BENCH TEST)'}"
                     self.status_timer = time.time() + 3.0
                 elif key in [ord('g'), ord('G')]:
-                    global LEVEL_GUARD_ENABLED
                     LEVEL_GUARD_ENABLED = not LEVEL_GUARD_ENABLED
                     self.status_banner = f">> Level Guard: {'AKTIF' if LEVEL_GUARD_ENABLED else 'NONAKTIF (BYPASS)'}"
                     self.status_timer = time.time() + 2.5
@@ -1441,8 +1520,14 @@ if __name__ == "__main__":
     parser.add_argument("--cam", "-c", default=None, help="Index kamera (0, 1) atau path file video")
     parser.add_argument("--video", "-v", default=None, help="Path berkas video pengujian")
     parser.add_argument("--model", "-m", type=str, default=None, help="Path berkas model YOLO (.onnx)")
+    parser.add_argument("--wp", "-w", type=str, default=None, help="Nomor Waypoint target deteksi & drop (misal: 3 atau 3,4 atau 3-5)")
     parser.add_argument("--sim", action="store_true", help="Jalankan dalam mode simulasi tanpa serial")
     args = parser.parse_args()
+
+    # Prioritaskan argumen target waypoint jika ada
+    if args.wp is not None:
+        TARGET_WAYPOINTS = normalize_waypoints(args.wp)
+        print(f"[CONFIG] Target Waypoint diatur via CLI: {TARGET_WAYPOINTS}")
 
     # Prioritaskan argumen video jika ada
     cam_input = args.video if args.video is not None else args.cam

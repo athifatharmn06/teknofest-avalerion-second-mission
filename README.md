@@ -75,8 +75,8 @@ Sesuai regulasi Teknofest, mekanisme penjatuhan payload menggunakan aturan **Cro
 | **`square_blue`** (Terpal Biru) | 🔴 **Jatuhkan Payload MERAH** | **Servo 7** (AUX 1) | `1000` | `2200` |
 | **`square_red`** (Terpal Merah) | 🔵 **Jatuhkan Payload BIRU** | **Servo 8** (AUX 2) | `1000` | `2200` |
 
-### Sistem Pengaman Deteksi & Dropping (3-Layer Zero Mistake Flight Safeguards):
-Dropping payload otomatis **hanya akan dieksekusi jika ketiga kondisi penerbangan berikut terpenuhi secara simultan**:
+### Sistem Pengaman Deteksi & Dropping (4-Layer Zero Mistake Flight Safeguards):
+Dropping payload otomatis **hanya akan dieksekusi jika keempat kondisi penerbangan berikut terpenuhi secara simultan**:
 
 1. **Layer 1 - AUTO Mode Guard**:
    * Pesawat **harus sedang dalam mode penerbangan `AUTO`** (Mode 10 ArduPlane).
@@ -90,14 +90,17 @@ Dropping payload otomatis **hanya akan dieksekusi jika ketiga kondisi penerbanga
      - **Roll**: Maksimal $\pm 10^\circ$ (`-10 deg <= Roll <= +10 deg`)
      - **Pitch**: Maksimal $\pm 8^\circ$ (`-8 deg <= Pitch <= +8 deg`)
    * Jika pesawat sedang bermanuver belok tajam (*banking*) saat melintas di atas target, dropping di-**HOLD** hingga pesawat kembali datar agar payload jatuh tegak lurus ke sasaran.
+4. **Layer 4 - Target Waypoint Guard**:
+   * Deteksi YOLO dan dropping **HANYA mulai aktif saat pesawat berada pada nomor Waypoint tertentu** yang Anda tentukan (misal: `TARGET_WAYPOINTS = [3]` atau `[3, 4]`).
+   * Saat pesawat masih berada di Waypoint sebelumnya (misal WP 1 atau WP 2 saat memanjat / transit), pipeline citra berada dalam status **`STANDBY WP GUARD`**, menghemat beban CPU dan mengeliminasi 100% risiko salah deteksi objek acak di luar area penjatuhan.
 
 > **💡 Catatan Uji Meja (Bench Testing)**:
-> Saat menguji mekanik servo di meja persiapan tanpa terbang, tekan tombol **`[F]`** pada keyboard untuk mengaktifkan **Bypass Mode** (Flight Safeguards AUTO & Takeoff dimatikan sementara), atau gunakan 4 tombol manual `[1]`, `[2]`, `[3]`, `[4]`.
+> Saat menguji mekanik servo di meja persiapan tanpa terbang, tekan tombol **`[F]`** pada keyboard untuk mengaktifkan **Bypass Mode** (AUTO & Takeoff dimatikan sementara), dan tekan **`[W]`** untuk menonaktifkan Waypoint Guard, atau gunakan tombol manual `[1]`, `[2]`, `[3]`, `[4]`.
 
-4. **Confidence Threshold Minimal 80% (0.80)**: Menghindari deteksi semu akibat pantulan cahaya.
-5. **OpenCV HSV Color Guard**: Memverifikasi secara matematis bahwa kotak deteksi benar-benar memiliki spektrum warna biru/merah asli di lapangan.
-6. **Anti-Glitch Debounce (2 Frame Konsekutif)**: Mencegah pelepasan akibat anomali frame sesaat (1 frame error).
-7. **Single-Drop Latch**: Setiap payload terkunci hanya bisa jatuh **satu kali secara otomatis**. Tidak akan terjadi *double dropping* saat target masih terlihat di kamera.
+5. **Confidence Threshold Minimal 80% (0.80)**: Menghindari deteksi semu akibat pantulan cahaya.
+6. **OpenCV HSV Color Guard**: Memverifikasi secara matematis bahwa kotak deteksi benar-benar memiliki spektrum warna biru/merah asli di lapangan.
+7. **Anti-Glitch Debounce (2 Frame Konsekutif)**: Mencegah pelepasan akibat anomali frame sesaat (1 frame error).
+8. **Single-Drop Latch**: Setiap payload terkunci hanya bisa jatuh **satu kali secara otomatis**. Tidak akan terjadi *double dropping* saat target masih terlihat di kamera.
 
 ---
 
@@ -123,14 +126,14 @@ python teknofest_dual_dropping_mission.py
 
 ### Menjalankan Tanpa Interaksi (100% Otomatis)
 ```powershell
-# Langsung buka COM7, Kamera Index 0, dan Model v1:
-python teknofest_dual_dropping_mission.py -p COM7 -b 57600 -c 0 -m v1_gazbmodel_exp.onnx
+# Langsung buka COM7, Kamera Index 0, Model v1, dan Aktif di WP 3:
+python teknofest_dual_dropping_mission.py -p COM7 -b 57600 -c 0 -m v1_gazbmodel_exp.onnx --wp 3
 
-# Menjalankan dengan Model v2.onnx:
-python teknofest_dual_dropping_mission.py -p COM7 -c 0 -m v2.onnx
+# Menjalankan aktif pada rentang Waypoint 3 sampai 5 (WP 3, 4, 5):
+python teknofest_dual_dropping_mission.py -p COM7 -c 0 -m v2.onnx --wp 3-5
 
-# Menggunakan file video rekaman dan Model v2:
-python teknofest_dual_dropping_mission.py -p COM7 --video "vid_input/20110814_042946.avi" -m v2.onnx
+# Menggunakan file video rekaman dan Model v2 (Mode Uji Coba):
+python teknofest_dual_dropping_mission.py -p COM7 --video "vid_input/20110814_042946.avi" -m v2.onnx --sim
 ```
 
 ---
@@ -147,6 +150,7 @@ Di layar GUI terdapat panel samping kanan dengan **5 Tombol Uji Interaktif** yan
 | **`[4] RESET SERVO BIRU`** | **`[4]`** | Mengembalikan Servo Biru ke posisi kunci (Servo 8 $\rightarrow$ 2100 PWM). |
 | **`[X] RESET SEMUA SERVO`** | **`[X]`** | Mengembalikan kedua servo secara bersamaan ke posisi standby. |
 | **Toggle Rekam Video** | **`[R]`** | **Mulai / Hentikan Rekam Video Full** ke folder `video_rec/` (`rec_YYYYMMDD_HHMMSS.mp4`). |
+| **Toggle Waypoint Guard** | **`[W]`** | Mengaktifkan / menonaktifkan batasan Waypoint (Bypass ke semua WP). |
 | **Toggle Flight Safeguards** | **`[F]`** | Mengaktifkan / menonaktifkan Guard Mode AUTO & Takeoff (Bypass untuk bench test di darat). |
 | **Toggle Level Guard** | **`[G]`** | Mengaktifkan / menonaktifkan Attitude Level Guard (Bypass untuk bench test). |
 | **Toggle Video Enhancer** | **`[SPACE]`** | Mengaktifkan / menonaktifkan filter pembersih EasyCap VRX secara live. |
@@ -166,13 +170,13 @@ Setiap kali kode `teknofest_dual_dropping_mission.py` dijalankan:
 
 ---
 
-## ⚙️ Konfigurasi Servo & Payload
+## ⚙️ Konfigurasi Servo, Safeguards & Waypoint
 
-Jika di kemudian hari terdapat perubahan mekanik (arah servo dibalik, channel diganti, atau batas kemiringan diubah), ubah bagian konfigurasi di baris 35–55 pada file [`teknofest_dual_dropping_mission.py`](file:///c:/Users/athif/Downloads/Teknofest/Kode/teknofest_dual_dropping_mission.py):
+Jika di kemudian hari terdapat perubahan nomor Waypoint, batas kemiringan, atau channel servo, ubah bagian konfigurasi di baris 75–115 pada file [`teknofest_dual_dropping_mission.py`](file:///c:/Users/athif/Downloads/Teknofest/Kode/teknofest_dual_dropping_mission.py):
 
 ```python
 # ==============================================================================
-# KONFIGURASI PAYLOAD & SERVO DROPPING (USER SECTION)
+# KONFIGURASI PAYLOAD & FLIGHT SAFEGUARDS (USER SECTION)
 # ==============================================================================
 
 # -- PAYLOAD MERAH (Diturunkan saat Target SQUARE BLUE terdeteksi)
@@ -182,13 +186,19 @@ PWM_RED_DROP = 2200            # PWM Release / Posisi Membuka
 
 # -- PAYLOAD BIRU (Diturunkan saat Target SQUARE RED terdeteksi)
 SERVO_BLUE_CHANNEL = 8         # Channel Servo di Flight Controller (AUX 2 / SERVO 8)
-PWM_BLUE_START = 1000          # PWM Standby / Posisi Mengunci
-PWM_BLUE_DROP = 2200           # PWM Release / Posisi Membuka
+PWM_BLUE_START = 2100          # PWM Standby / Posisi Mengunci
+PWM_BLUE_DROP = 1100           # PWM Release / Posisi Membuka
 
-# -- ATTITUDE LEVEL FLIGHT GUARD
-LEVEL_GUARD_ENABLED = True     # True: Wajib datar saat drop, False: Bypass
-MAX_ABS_ROLL_DEG = 10.0        # Toleransi Roll Maksimal (+/- 10 Derajat)
-MAX_ABS_PITCH_DEG = 8.0        # Toleransi Pitch Maksimal (+/- 8 Derajat)
+# -- FLIGHT SAFEGUARDS (PENGAMAN PENERBANGAN SEBELUM DROPPING)
+AUTO_MODE_GUARD_ENABLED = True     # Hanya boleh drop jika Flight Controller di Mode AUTO
+TAKEOFF_GUARD_ENABLED = True       # Hanya boleh drop jika ketinggian sudah mencukupi (Takeoff Complete)
+LEVEL_GUARD_ENABLED = True         # Hanya boleh drop jika pesawat datar (+/- 10 deg Roll, +/- 8 deg Pitch)
+WAYPOINT_GUARD_ENABLED = True      # True: Mulai deteksi & drop HANYA di Waypoint target, False: Bypass
+TARGET_WAYPOINTS = [3]             # Nomor Waypoint target (Contoh: [3] atau [3, 4] atau range [3, 4, 5])
+MIN_TAKEOFF_ALT_METERS = 30.0      # Ketinggian minimal lepas landas (30 meter AGL / di atas 30%)
+TAKEOFF_ALT_PERCENT = 30.0         # Batas ambang minimal: 30% dari Target Ketinggian Misi
+MAX_ABS_ROLL_DEG = 10.0            # Toleransi Roll Maksimal (+/- 10 Derajat)
+MAX_ABS_PITCH_DEG = 8.0            # Toleransi Pitch Maksimal (+/- 8 Derajat)
 
 # -- YOLO & VISION CONFIGURATION
 YOLO_MODEL_PATH = "v1_gazbmodel_exp.onnx"
