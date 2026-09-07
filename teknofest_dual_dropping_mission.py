@@ -30,6 +30,7 @@ import queue
 import datetime
 import subprocess
 import importlib.util
+import ctypes
 from pathlib import Path
 
 # ==============================================================================
@@ -84,16 +85,33 @@ SERVO_BLUE_CHANNEL = 8         # Channel Servo di Flight Controller (AUX 2 / SER
 PWM_BLUE_START = 2100          # PWM Standby / Kunci Payload
 PWM_BLUE_DROP = 1100           # PWM Release / Buka Kunci Dropping
 
-# -- FLIGHT SAFEGUARDS (PENGAMAN PENERBANGAN SEBELUM DROPPING)
-AUTO_MODE_GUARD_ENABLED = True     # Hanya boleh drop jika Flight Controller di Mode AUTO
-TAKEOFF_GUARD_ENABLED = True       # Hanya boleh drop jika ketinggian sudah mencukupi (Takeoff Complete)
-LEVEL_GUARD_ENABLED = True         # Hanya boleh drop jika pesawat datar (+/- 10 deg Roll, +/- 8 deg Pitch)
-WAYPOINT_GUARD_ENABLED = True      # True: Mulai deteksi & drop HANYA di Waypoint target, False: Bypass
-TARGET_WAYPOINTS = [3]             # Nomor Waypoint target (Contoh: [3] atau [3, 4] atau range [3, 4, 5])
-MIN_TAKEOFF_ALT_METERS = 30.0      # Ketinggian minimal lepas landas (30 meter AGL / di atas 30%)
-TAKEOFF_ALT_PERCENT = 30.0         # Batas ambang minimal: 30% dari Target Ketinggian Misi
-MAX_ABS_ROLL_DEG = 10.0            # Toleransi Roll Maksimal (+/- 10 Derajat)
-MAX_ABS_PITCH_DEG = 8.0            # Toleransi Pitch Maksimal (+/- 8 Derajat)
+# -- MASTER DETECTION & AUTO-DROP TOGGLE (NO SAFEGUARD DIRECT ACTION)
+AUTO_DETECTION_DEFAULT = True      # Status awal deteksi & dropping otomatis (Toggle via tombol [CTRL])
+
+# -- MOUSE SIDE BUTTON MAPPING (Fantech & Gaming Mouse 2 Side Buttons)
+# Mode "TARGET" (Sesuai Regulasi Teknofest Cross-Drop):
+#   - Side Button Atas  (Forward / Button 5): Sasaran MERAH SQUARE -> Drop Payload BIRU (Servo 8)
+#   - Side Button Bawah (Back / Button 4)   : Sasaran BIRU SQUARE  -> Drop Payload MERAH (Servo 7)
+# Mode "PAYLOAD" (Direct Servo Color):
+#   - Side Button Atas  (Forward / Button 5): Drop Langsung Payload MERAH (Servo 7)
+#   - Side Button Bawah (Back / Button 4)   : Drop Langsung Payload BIRU (Servo 8)
+MOUSE_SIDE_BUTTON_MODE = "TARGET"  # "TARGET" atau "PAYLOAD"
+
+# Virtual Key Codes Windows (ctypes GetAsyncKeyState)
+VK_CONTROL = 0x11   # Tombol CTRL (Modifier Toggle Deteksi & Dropping)
+VK_XBUTTON1 = 0x05  # Tombol Samping Bawah / Back (Mouse Button 4)
+VK_XBUTTON2 = 0x06  # Tombol Samping Atas / Forward (Mouse Button 5)
+
+# -- TELEMETRY HUD SETTINGS (MONITORING ONLY - TIDAK MEMBLOKIR DROPPING)
+AUTO_MODE_GUARD_ENABLED = False    # Safeguard bypass: Dropping tidak diblokir oleh mode terbang
+TAKEOFF_GUARD_ENABLED = False      # Safeguard bypass: Dropping tidak diblokir oleh ketinggian
+LEVEL_GUARD_ENABLED = False        # Safeguard bypass: Dropping tidak diblokir oleh kemiringan
+WAYPOINT_GUARD_ENABLED = False     # Safeguard bypass: Dropping aktif di semua waypoint
+TARGET_WAYPOINTS = [3]             # Nomor Waypoint target (Monitoring informasi)
+MIN_TAKEOFF_ALT_METERS = 30.0      # Ketinggian minimal referensi
+TAKEOFF_ALT_PERCENT = 30.0         # Batas ambang minimal referensi
+MAX_ABS_ROLL_DEG = 10.0            # Toleransi Roll referensi
+MAX_ABS_PITCH_DEG = 8.0            # Toleransi Pitch referensi
 
 
 def normalize_waypoints(wps):
@@ -684,7 +702,8 @@ class TeknofestDualDroppingMission:
 
         # UI & Buttons
         self.buttons = []
-        self.status_banner = "SISTEM SIAP: Menunggu Target Terpal..."
+        self.detection_active = AUTO_DETECTION_DEFAULT  # Master Toggle Deteksi & Dropping [CTRL]
+        self.status_banner = "SISTEM SIAP: Deteksi & Drop [AKTIF] (Tekan CTRL utk Pause)"
         self.status_timer = time.time() + 4.0
 
         # Video Recorder & Detection Proof Logger
@@ -834,6 +853,37 @@ class TeknofestDualDroppingMission:
         self.status_banner = ">> SEMUA SERVO DI-RESET KE STANDBY!"
         self.status_timer = time.time() + 3.0
 
+    # ==========================================================================
+    # MOUSE SIDE BUTTON ACTIONS (FANTECH & GAMING MOUSE)
+    # ==========================================================================
+    def handle_side_button_top(self):
+        """
+        Tombol Samping Atas Mouse (Forward / VK_XBUTTON2):
+        Memicu pelepasan dropping untuk sasaran MERAH SQUARE.
+        """
+        if MOUSE_SIDE_BUTTON_MODE == "TARGET":
+            # Target Square Red -> Sesuai aturan Teknofest melepaskan Payload Biru (Servo 8)
+            print("\n[MOUSE] SIDE BUTTON TOP -> SASARAN MERAH SQUARE -> TRIGGER DROP BIRU (SERVO 8)")
+            self.trigger_drop_blue("SIDE BUTTON TOP [TARGET MERAH SQUARE]")
+        else:
+            # Mode Direct Payload: Lepas Payload Merah (Servo 7)
+            print("\n[MOUSE] SIDE BUTTON TOP -> TRIGGER DROP MERAH (SERVO 7)")
+            self.trigger_drop_red("SIDE BUTTON TOP [PAYLOAD MERAH]")
+
+    def handle_side_button_bottom(self):
+        """
+        Tombol Samping Bawah Mouse (Back / VK_XBUTTON1):
+        Memicu pelepasan dropping untuk sasaran BIRU SQUARE.
+        """
+        if MOUSE_SIDE_BUTTON_MODE == "TARGET":
+            # Target Square Blue -> Sesuai aturan Teknofest melepaskan Payload Merah (Servo 7)
+            print("\n[MOUSE] SIDE BUTTON BOTTOM -> SASARAN BIRU SQUARE -> TRIGGER DROP MERAH (SERVO 7)")
+            self.trigger_drop_red("SIDE BUTTON BOTTOM [TARGET BIRU SQUARE]")
+        else:
+            # Mode Direct Payload: Lepas Payload Biru (Servo 8)
+            print("\n[MOUSE] SIDE BUTTON BOTTOM -> TRIGGER DROP BIRU (SERVO 8)")
+            self.trigger_drop_blue("SIDE BUTTON BOTTOM [PAYLOAD BIRU]")
+
     def get_attitude(self):
         if self.bridge is not None:
             return self.bridge.roll_deg, self.bridge.pitch_deg, self.bridge.yaw_deg
@@ -954,19 +1004,16 @@ class TeknofestDualDroppingMission:
 
         h, w = frame.shape[:2]
 
-        # 0. Cek Waypoint Guard (Mulai deteksi HANYA jika berada di Waypoint target)
-        wp_ok, wp_desc = self.is_target_waypoint()
-        if WAYPOINT_GUARD_ENABLED and not wp_ok:
+        # 0. Master Switch [CTRL]: Jika Deteksi & Auto-Dropping NONAKTIF / PAUSED
+        if not self.detection_active:
             self.consecutive_blue = 0
             self.consecutive_red = 0
 
-            # Indikator HUD Standby Waypoint di video viewport
-            target_str = str(normalize_waypoints(TARGET_WAYPOINTS))
-            cur_wp = self.bridge.mission_seq if self.bridge else 0
-            hud_txt = f"STANDBY WP GUARD: Menunggu WP Target {target_str} (Saat ini: WP {cur_wp})"
+            # Indikator HUD PAUSED di video viewport
             cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
-            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 165, 255), 1)
-            cv2.putText(frame, hud_txt, (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.44, (0, 215, 255), 1, cv2.LINE_AA)
+            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 140, 255), 1)
+            cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED) [Tekan CTRL untuk Mengaktifkan]",
+                        (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
 
             # Tetap update counter frame & rekam jika [R] aktif
             self.frame_counter += 1
@@ -987,6 +1034,10 @@ class TeknofestDualDroppingMission:
             if cv2.countNonZero(mask_b) < MIN_COLOR_GUARD_PIXELS and cv2.countNonZero(mask_r) < MIN_COLOR_GUARD_PIXELS:
                 self.consecutive_blue = 0
                 self.consecutive_red = 0
+                self.frame_counter += 1
+                if self.recorder.is_recording:
+                    self.recorder.write(frame)
+                self.proc_ms = (time.time() - t_start) * 1000.0
                 return frame
 
         # YOLO Inference
@@ -1012,73 +1063,99 @@ class TeknofestDualDroppingMission:
             if x2 <= x1 or y2 <= y1: continue
 
             center = ((x1 + x2) // 2, (y1 + y2) // 2)
-            is_blue = ("blue" in label or label == "square_blue")
-            is_red = ("red" in label or label == "square_red")
 
-            # ROI Color Guard Check
-            if COLOR_GUARD_ENABLED:
-                if is_blue and not self.check_roi_color(hsv, (x1, y1, x2, y2), "blue"):
+            # Klasifikasi Target:
+            # - Invalid Shapes: triangle_red & hexagon_blue (Tetap digambar bounding box, TIDAK kirim command)
+            # - Valid Targets : square_blue (-> Drop Merah) & square_red (-> Drop Biru)
+            is_triangle_red = ("triangle" in label or label == "triangle_red")
+            is_hexagon_blue = ("hexagon" in label or label == "hexagon_blue")
+            is_square_blue  = (label == "square_blue" or ("square" in label and "blue" in label))
+            is_square_red   = (label == "square_red" or ("square" in label and "red" in label))
+
+            # ------------------------------------------------------------------
+            # KASUS 1: TARGET INVALID (triangle_red & hexagon_blue)
+            # Tampilkan Bounding Box & Label INVALID, tetapi TIDAK KIRIM COMMAND!
+            # ------------------------------------------------------------------
+            if is_triangle_red or is_hexagon_blue:
+                inv_color = (0, 165, 255)  # Oranye peringatan
+                cv2.rectangle(frame, (x1, y1), (x2, y2), inv_color, 2)
+                d = 12
+                cv2.line(frame, (x1, y1), (x1 + d, y1), (0, 255, 255), 2)
+                cv2.line(frame, (x1, y1), (x1, y1 + d), (0, 255, 255), 2)
+                cv2.line(frame, (x2, y2), (x2 - d, y2), (0, 255, 255), 2)
+                cv2.line(frame, (x2, y2), (x2, y2 - d), (0, 255, 255), 2)
+                cv2.circle(frame, center, 4, (120, 120, 120), -1)
+
+                inv_tag = f"[INVALID] {label.upper()} {conf * 100:.0f}% (NO DROP)"
+                cv2.putText(frame, inv_tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.48, inv_color, 1, cv2.LINE_AA)
+
+                # Simpan bukti target invalid tanpa perintah dropping
+                rel_alt = self.bridge.relative_alt if self.bridge else 0.0
+                self.proof_logger.log_detection(frame, f"INVALID_{label}", conf, self.frame_counter, f"Alt:{rel_alt:.1f}m | INVALID (NO DROP)")
+                continue
+
+            # ------------------------------------------------------------------
+            # KASUS 2: TARGET VALID SQUARE BLUE (Terpal Biru -> Drop Merah)
+            # ------------------------------------------------------------------
+            if is_square_blue:
+                if COLOR_GUARD_ENABLED and not self.check_roi_color(hsv, (x1, y1, x2, y2), "blue"):
                     continue
-                if is_red and not self.check_roi_color(hsv, (x1, y1, x2, y2), "red"):
-                    continue
 
-            # Render Bounding Box
-            color = (255, 120, 0) if is_blue else (0, 60, 255)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            d = 12
-            cv2.line(frame, (x1, y1), (x1 + d, y1), (255, 255, 255), 2)
-            cv2.line(frame, (x1, y1), (x1, y1 + d), (255, 255, 255), 2)
-            cv2.line(frame, (x2, y2), (x2 - d, y2), (255, 255, 255), 2)
-            cv2.line(frame, (x2, y2), (x2, y2 - d), (255, 255, 255), 2)
-            cv2.circle(frame, center, 4, (0, 255, 255), -1)
+                color = (255, 120, 0)  # Biru Cerah
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                d = 12
+                cv2.line(frame, (x1, y1), (x1 + d, y1), (255, 255, 255), 2)
+                cv2.line(frame, (x1, y1), (x1, y1 + d), (255, 255, 255), 2)
+                cv2.line(frame, (x2, y2), (x2 - d, y2), (255, 255, 255), 2)
+                cv2.line(frame, (x2, y2), (x2, y2 - d), (255, 255, 255), 2)
+                cv2.circle(frame, center, 4, (0, 255, 255), -1)
 
-            tag = f"{label.upper()} {conf * 100:.0f}%"
-            cv2.putText(frame, tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.55, color, 1, cv2.LINE_AA)
+                tag = f"[VALID] SQUARE_BLUE {conf * 100:.0f}% -> DROP MERAH"
+                cv2.putText(frame, tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.52, color, 1, cv2.LINE_AA)
 
-            if is_blue:
                 if detected_blue is None or conf > detected_blue["conf"]:
                     detected_blue = {"conf": conf, "box": (x1, y1, x2, y2), "center": center}
-            elif is_red:
+
+            # ------------------------------------------------------------------
+            # KASUS 3: TARGET VALID SQUARE RED (Terpal Merah -> Drop Biru)
+            # ------------------------------------------------------------------
+            elif is_square_red:
+                if COLOR_GUARD_ENABLED and not self.check_roi_color(hsv, (x1, y1, x2, y2), "red"):
+                    continue
+
+                color = (0, 60, 255)  # Merah Cerah
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                d = 12
+                cv2.line(frame, (x1, y1), (x1 + d, y1), (255, 255, 255), 2)
+                cv2.line(frame, (x1, y1), (x1, y1 + d), (255, 255, 255), 2)
+                cv2.line(frame, (x2, y2), (x2 - d, y2), (255, 255, 255), 2)
+                cv2.line(frame, (x2, y2), (x2, y2 - d), (255, 255, 255), 2)
+                cv2.circle(frame, center, 4, (0, 255, 255), -1)
+
+                tag = f"[VALID] SQUARE_RED {conf * 100:.0f}% -> DROP BIRU"
+                cv2.putText(frame, tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.52, color, 1, cv2.LINE_AA)
+
                 if detected_red is None or conf > detected_red["conf"]:
                     detected_red = {"conf": conf, "box": (x1, y1, x2, y2), "center": center}
 
-        # 4 Lapis Flight Safeguards (AUTO, TAKEOFF, LEVEL, WAYPOINT)
-        all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc, wp_ok, wp_desc = self.check_all_safeguards()
-
-        # -- CROSS-DROP LOGIC (Zero Mistake + 4 Safeguards: AUTO, TAKEOFF, LEVEL, WAYPOINT)
-        # 1. Target Square Blue -> Trigger Payload Merah
+        # ----------------------------------------------------------------------
+        # CROSS-DROP EXECUTION (LANGSUNG EKSEKUSI - TANPA SAFEGUARD BLOCKING)
+        # ----------------------------------------------------------------------
+        # 1. Target Square Blue -> Trigger Payload Merah (Servo 7)
         if detected_blue is not None:
             self.consecutive_blue += 1
             self.last_blue_info = detected_blue
             if self.consecutive_blue >= MIN_CONSECUTIVE_FRAMES and not self.payload_red_dropped:
-                if all_ok:
-                    self.trigger_drop_red(f"Conf: {detected_blue['conf'] * 100:.0f}% | {auto_desc} | {to_desc} | {lvl_desc} | {wp_desc}")
-                else:
-                    reasons = []
-                    if not auto_ok: reasons.append(auto_desc)
-                    if not to_ok: reasons.append(to_desc)
-                    if not lvl_ok: reasons.append(lvl_desc)
-                    if not wp_ok: reasons.append(wp_desc)
-                    self.status_banner = f"HOLD DROP MERAH: {', '.join(reasons)}"
-                    self.status_timer = time.time() + 0.5
+                self.trigger_drop_red(f"Target SQUARE BLUE (Conf: {detected_blue['conf'] * 100:.0f}%) [DIRECT ACTION]")
         else:
             self.consecutive_blue = 0
 
-        # 2. Target Square Red -> Trigger Payload Biru
+        # 2. Target Square Red -> Trigger Payload Biru (Servo 8)
         if detected_red is not None:
             self.consecutive_red += 1
             self.last_red_info = detected_red
             if self.consecutive_red >= MIN_CONSECUTIVE_FRAMES and not self.payload_blue_dropped:
-                if all_ok:
-                    self.trigger_drop_blue(f"Conf: {detected_red['conf'] * 100:.0f}% | {auto_desc} | {to_desc} | {lvl_desc} | {wp_desc}")
-                else:
-                    reasons = []
-                    if not auto_ok: reasons.append(auto_desc)
-                    if not to_ok: reasons.append(to_desc)
-                    if not lvl_ok: reasons.append(lvl_desc)
-                    if not wp_ok: reasons.append(wp_desc)
-                    self.status_banner = f"HOLD DROP BIRU: {', '.join(reasons)}"
-                    self.status_timer = time.time() + 0.5
+                self.trigger_drop_blue(f"Target SQUARE RED (Conf: {detected_red['conf'] * 100:.0f}%) [DIRECT ACTION]")
         else:
             self.consecutive_red = 0
 
@@ -1090,14 +1167,13 @@ class TeknofestDualDroppingMission:
             self.recorder.write(frame)
 
         # 3. Simpan foto bukti deteksi ke folder detected_proof/<session_start>/ tanpa jeda
+        rel_alt = self.bridge.relative_alt if self.bridge else 0.0
         if detected_blue is not None:
-            rel_alt = self.bridge.relative_alt if self.bridge else 0.0
-            info = f"Alt:{rel_alt:.1f}m | {auto_desc} | {lvl_desc} | {wp_desc}"
+            info = f"Alt:{rel_alt:.1f}m | VALID TARGET -> DROP MERAH"
             self.proof_logger.log_detection(frame, "square_blue", detected_blue["conf"], self.frame_counter, info)
 
         if detected_red is not None:
-            rel_alt = self.bridge.relative_alt if self.bridge else 0.0
-            info = f"Alt:{rel_alt:.1f}m | {auto_desc} | {lvl_desc} | {wp_desc}"
+            info = f"Alt:{rel_alt:.1f}m | VALID TARGET -> DROP BIRU"
             self.proof_logger.log_detection(frame, "square_red", detected_red["conf"], self.frame_counter, info)
 
         self.proc_ms = (time.time() - t_start) * 1000.0
@@ -1150,39 +1226,46 @@ class TeknofestDualDroppingMission:
         p_x = scaled_w
 
         # 1. Header Sidebar
+        self.buttons = []
         cv2.rectangle(canvas, (p_x, 0), (p_x + panel_w, 42), (38, 38, 38), -1)
         cv2.putText(canvas, "TEKNOFEST MISSION 2", (p_x + 18, 28), cv2.FONT_HERSHEY_DUPLEX, 0.65, (0, 220, 255), 1, cv2.LINE_AA)
 
-        # 2. 4-LAYER FLIGHT SAFEGUARDS CARD (AUTO, TAKEOFF, LEVEL, WAYPOINT)
+        # 2. DETEKSI & DROPPING MASTER CARD [CTRL] (NO SAFEGUARD MODE)
         y_pos = 48
-        card_h = 112
-        all_ok, auto_ok, auto_desc, to_ok, to_desc, lvl_ok, lvl_desc, wp_ok, wp_desc = self.check_all_safeguards()
+        card_h = 118
 
-        cv2.rectangle(canvas, (p_x + 10, y_pos), (p_x + panel_w - 10, y_pos + card_h), (34, 34, 34), -1)
-        border_color = (0, 255, 0) if all_ok else (0, 160, 255)
+        det_on = self.detection_active
+        card_bg = (18, 38, 22) if det_on else (38, 22, 18)
+        border_color = (0, 255, 120) if det_on else (0, 140, 255)
+        cv2.rectangle(canvas, (p_x + 10, y_pos), (p_x + panel_w - 10, y_pos + card_h), card_bg, -1)
         cv2.rectangle(canvas, (p_x + 10, y_pos), (p_x + panel_w - 10, y_pos + card_h), border_color, 1)
 
-        cv2.putText(canvas, "FLIGHT SAFEGUARDS (4-LAYER):", (p_x + 18, y_pos + 18), cv2.FONT_HERSHEY_DUPLEX, 0.44, (0, 220, 255), 1)
+        # Title & Status Dot
+        dot_c = (0, 255, 120) if det_on else (0, 140, 255)
+        cv2.circle(canvas, (p_x + 22, y_pos + 18), 5, dot_c, -1)
+        status_txt = "DETEKSI & DROP: AKTIF [CTRL]" if det_on else "DETEKSI & DROP: PAUSED [CTRL]"
+        status_col = (0, 255, 180) if det_on else (0, 180, 255)
+        cv2.putText(canvas, status_txt, (p_x + 34, y_pos + 22), cv2.FONT_HERSHEY_DUPLEX, 0.44, status_col, 1, cv2.LINE_AA)
 
-        # Safeguard 1: Flight Mode (AUTO)
-        auto_c = (0, 255, 0) if auto_ok else (0, 0, 255)
-        cv2.putText(canvas, f"[1] Mode Flight : {auto_desc}", (p_x + 18, y_pos + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, auto_c, 1, cv2.LINE_AA)
+        # Subtitle Action Mode
+        mode_label = "MODE: TARGET (Cross-Drop)" if MOUSE_SIDE_BUTTON_MODE == "TARGET" else "MODE: DIRECT PAYLOAD"
+        cv2.putText(canvas, f"Safeguard: BYPASS | {mode_label}", (p_x + 18, y_pos + 42), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
 
-        # Safeguard 2: Takeoff Altitude
-        to_c = (0, 255, 0) if to_ok else (0, 165, 255)
-        cv2.putText(canvas, f"[2] Takeoff      : {to_desc}", (p_x + 18, y_pos + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.38, to_c, 1, cv2.LINE_AA)
+        # Mouse Side Buttons Guide
+        cv2.putText(canvas, "TOMBOL SAMPING MOUSE (FANTECH):", (p_x + 18, y_pos + 62), cv2.FONT_HERSHEY_DUPLEX, 0.38, (0, 220, 255), 1)
+        side_top_desc = "Drop Merah Square (Servo 8)" if MOUSE_SIDE_BUTTON_MODE == "TARGET" else "Drop Payload Merah (Servo 7)"
+        side_bot_desc = "Drop Biru Square (Servo 7)" if MOUSE_SIDE_BUTTON_MODE == "TARGET" else "Drop Payload Biru (Servo 8)"
+        cv2.putText(canvas, f" * Top/Fwd : {side_top_desc}", (p_x + 18, y_pos + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (230, 230, 230), 1, cv2.LINE_AA)
+        cv2.putText(canvas, f" * Bot/Back: {side_bot_desc}", (p_x + 18, y_pos + 98), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (230, 230, 230), 1, cv2.LINE_AA)
 
-        # Safeguard 3: Level Flight
-        lvl_c = (0, 255, 0) if lvl_ok else (0, 165, 255)
-        cv2.putText(canvas, f"[3] Attitude     : {lvl_desc}", (p_x + 18, y_pos + 68), cv2.FONT_HERSHEY_SIMPLEX, 0.38, lvl_c, 1, cv2.LINE_AA)
-
-        # Safeguard 4: Target Waypoint
-        wp_c = (0, 255, 0) if wp_ok else (0, 165, 255)
-        cv2.putText(canvas, f"[4] Waypoint     : {wp_desc}", (p_x + 18, y_pos + 84), cv2.FONT_HERSHEY_SIMPLEX, 0.38, wp_c, 1, cv2.LINE_AA)
-
-        # Summary Badge
-        summary_txt = "STATUS: ARMED (SIAP DROPPING)" if all_ok else "STATUS: TERKUNCI (HOLD)"
-        cv2.putText(canvas, summary_txt, (p_x + 18, y_pos + 104), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 255, 0) if all_ok else (0, 140, 255), 1, cv2.LINE_AA)
+        # Daftarkan tombol interaktif untuk Deteksi Master Card
+        self.buttons.append({
+            "name": "TOGGLE_DETECTION",
+            "rect": (p_x + 10, y_pos, panel_w - 20, card_h),
+            "label": "[CTRL] TOGGLE DETEKSI",
+            "bg": card_bg,
+            "fg": status_col
+        })
 
         # 3. RECORDER & PROOF CARD
         y_pos += card_h + 8
@@ -1222,7 +1305,6 @@ class TeknofestDualDroppingMission:
         cv2.putText(canvas, b_status, (p_x + 18, b_box_y + 38), cv2.FONT_HERSHEY_DUPLEX, 0.48, (255, 120, 0) if self.payload_blue_dropped else (0, 255, 0), 1)
 
         # 6. KOTAK STATUS & TOGGLE VIDEO ENHANCER (Tombol Interaktif [SPACE])
-        self.buttons = []
         enh_box_y = b_box_y + 56
         enh_box_h = 42
         enh_w = panel_w - 20
@@ -1305,10 +1387,12 @@ class TeknofestDualDroppingMission:
         hud_bar[:] = (18, 18, 18)
 
         msg_c = self.bridge.msg_count if self.bridge else 0
-        guards_status = f"Guards: [AUTO:{'ON' if AUTO_MODE_GUARD_ENABLED else 'OFF'}, TO:{'ON' if TAKEOFF_GUARD_ENABLED else 'OFF'}, LVL:{'ON' if LEVEL_GUARD_ENABLED else 'OFF'}, WP:{'ON' if WAYPOINT_GUARD_ENABLED else 'OFF'}]"
-        model_name = Path(self.model_path).name
+        det_s = "DETEKSI: AKTIF [CTRL]" if self.detection_active else "DETEKSI: PAUSED [CTRL]"
         enh_status = "ON" if self.enhancer.enabled else "OFF"
-        info_txt = f"FPS: {self.pipeline_fps:4.1f} | Lat: {self.proc_ms:3.0f}ms | Enhancer: {enh_status} (SPACE) | Telem: {msg_c} msgs | {guards_status} | {model_name}"
+        model_name = Path(self.model_path).name
+        alt_val = f"{self.bridge.relative_alt:.1f}m" if self.bridge else "N/A"
+        mode_val = self.bridge.mode_name if self.bridge else "N/A"
+        info_txt = f"FPS: {self.pipeline_fps:4.1f} | Lat: {self.proc_ms:3.0f}ms | {det_s} | Enh: {enh_status} | Alt: {alt_val} | Mode: {mode_val} | {model_name}"
         cv2.putText(hud_bar, info_txt, (15, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1, cv2.LINE_AA)
 
         if time.time() < self.status_timer and self.status_banner:
@@ -1328,7 +1412,12 @@ class TeknofestDualDroppingMission:
                 bx, by, bw, bh = b["rect"]
                 if bx <= x <= bx + bw and by <= y <= by + bh:
                     name = b["name"]
-                    if name == "DROP_RED":
+                    if name == "TOGGLE_DETECTION":
+                        self.detection_active = not self.detection_active
+                        st = "AKTIF" if self.detection_active else "NONAKTIF (PAUSED)"
+                        self.status_banner = f">> Deteksi & Auto-Drop: {st} [CTRL]"
+                        self.status_timer = time.time() + 2.5
+                    elif name == "DROP_RED":
                         self.trigger_drop_red("KLIK TOMBOL GUI")
                     elif name == "RESET_RED":
                         self.reset_servo_red()
@@ -1353,29 +1442,69 @@ class TeknofestDualDroppingMission:
         cv2.setMouseCallback(GUI_WINDOW_NAME, self.on_mouse_click)
 
         print("\n" + "=" * 65)
-        print(" SISTEM AUTONOMI DUAL DROPPING TEKNOFEST AKTIF:")
-        target_wp_disp = normalize_waypoints(TARGET_WAYPOINTS)
-        print(f"  -> Target Waypoint : {target_wp_disp} {'[AKTIF]' if WAYPOINT_GUARD_ENABLED else '[BYPASS]'}")
-        print(f"  -> Video Enhancer  : {'[AKTIF (Clean V2)]' if self.enhancer.enabled else '[NONAKTIF / RAW (Tekan SPACE utk aktifkan)]'}")
-        print("  [1]         : Trigger Manual Drop Merah (Servo 7 -> Drop PWM)")
-        print("  [2]         : Reset Servo Merah (Servo 7 -> Start PWM)")
-        print("  [3]         : Trigger Manual Drop Biru (Servo 8 -> Drop PWM)")
-        print("  [4]         : Reset Servo Biru (Servo 8 -> Start PWM)")
-        print("  [X]         : Reset Semua Servo ke Standby")
-        print("  [R]         : Toggle Rekam Video Full (Mulai / Stop Rekam)")
-        print("  [W]         : Toggle Waypoint Guard ON/OFF")
-        print("  [F]         : Toggle Flight Safeguards (AUTO + Takeoff Guard ON/OFF)")
-        print("  [G]         : Toggle Attitude Level Guard ON/OFF")
-        print("  [SPACE]     : Toggle Video Enhancer ON/OFF (Default: NONAKTIF)")
-        print("  [Q] / [ESC] : Keluar")
+        print(" SISTEM AUTONOMI DUAL DROPPING TEKNOFEST (DIRECT / NO SAFEGUARD):")
+        det_st = "AKTIF" if self.detection_active else "NONAKTIF"
+        print(f"  -> Deteksi & Auto-Drop : [{det_st}] (Tekan CTRL utk Pause/Resume)")
+        print(f"  -> Video Enhancer      : {'[AKTIF (Clean V2)]' if self.enhancer.enabled else '[NONAKTIF / RAW (Tekan SPACE utk aktifkan)]'}")
+        print(f"  -> Mode Tombol Samping : {MOUSE_SIDE_BUTTON_MODE} (Cross-Drop Sesuai Regulasi)")
+        print("  [CTRL]              : Toggle Deteksi & Auto-Dropping ON/OFF")
+        print("  [Side Btn Atas]     : Manual Drop Merah Square (Forward Thumb Btn)")
+        print("  [Side Btn Bawah]    : Manual Drop Biru Square (Back Thumb Btn)")
+        print("  [1]                 : Trigger Manual Drop Merah (Servo 7 -> Drop PWM)")
+        print("  [2]                 : Reset Servo Merah (Servo 7 -> Start PWM)")
+        print("  [3]                 : Trigger Manual Drop Biru (Servo 8 -> Drop PWM)")
+        print("  [4]                 : Reset Servo Biru (Servo 8 -> Start PWM)")
+        print("  [X]                 : Reset Semua Servo ke Standby")
+        print("  [R]                 : Toggle Rekam Video Full (Mulai / Stop Rekam)")
+        print("  [SPACE]             : Toggle Video Enhancer ON/OFF (Default: NONAKTIF)")
+        print("  [Q] / [ESC]         : Keluar")
         print("=" * 65 + "\n")
 
         fps_timer = time.time()
         fps_frames = 0
         self.pipeline_fps = 0.0
 
+        # State Edge Detection untuk Tombol Windows (CTRL & Tombol Samping Mouse)
+        last_ctrl_state = False
+        last_xbtn1_state = False
+        last_xbtn2_state = False
+        user32 = ctypes.windll.user32 if os.name == 'nt' else None
+
         try:
             while True:
+                # Polling Input Windows (CTRL & Tombol Samping Mouse Fantech)
+                if user32 is not None:
+                    # 1. Polling [CTRL] (VK_CONTROL = 0x11): Toggle Deteksi & Auto-Dropping
+                    try:
+                        ctrl_down = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+                        if ctrl_down and not last_ctrl_state:
+                            self.detection_active = not self.detection_active
+                            st = "AKTIF" if self.detection_active else "NONAKTIF (PAUSED)"
+                            self.status_banner = f">> Deteksi & Auto-Drop: {st} [CTRL]"
+                            self.status_timer = time.time() + 3.0
+                            print(f"\n[CONTROL] Deteksi & Auto-Dropping di-toggle: {st}")
+                        last_ctrl_state = ctrl_down
+                    except Exception:
+                        pass
+
+                    # 2. Polling Tombol Samping Atas (VK_XBUTTON2 = 0x06 / Forward Thumb Btn)
+                    try:
+                        xbtn2_down = bool(user32.GetAsyncKeyState(VK_XBUTTON2) & 0x8000)
+                        if xbtn2_down and not last_xbtn2_state:
+                            self.handle_side_button_top()
+                        last_xbtn2_state = xbtn2_down
+                    except Exception:
+                        pass
+
+                    # 3. Polling Tombol Samping Bawah (VK_XBUTTON1 = 0x05 / Back Thumb Btn)
+                    try:
+                        xbtn1_down = bool(user32.GetAsyncKeyState(VK_XBUTTON1) & 0x8000)
+                        if xbtn1_down and not last_xbtn1_state:
+                            self.handle_side_button_bottom()
+                        last_xbtn1_state = xbtn1_down
+                    except Exception:
+                        pass
+
                 # 1. Vision YOLO & Color Guard
                 processed_frame = self.process_vision()
                 if processed_frame is None:
@@ -1421,21 +1550,6 @@ class TeknofestDualDroppingMission:
                 elif key in [ord('x'), ord('X')]:
                     self.reset_all_servos()
                     self.status_banner = ">> SEMUA SERVO DI-RESET KE STANDBY (Tombol [X])"
-                    self.status_timer = time.time() + 2.5
-                elif key in [ord('w'), ord('W')]:
-                    WAYPOINT_GUARD_ENABLED = not WAYPOINT_GUARD_ENABLED
-                    target_str = str(normalize_waypoints(TARGET_WAYPOINTS))
-                    self.status_banner = f">> Waypoint Guard: {'AKTIF (' + target_str + ')' if WAYPOINT_GUARD_ENABLED else 'BYPASS (SEMUA WP)'}"
-                    self.status_timer = time.time() + 3.0
-                elif key in [ord('f'), ord('F')]:
-                    new_state = not (AUTO_MODE_GUARD_ENABLED and TAKEOFF_GUARD_ENABLED)
-                    AUTO_MODE_GUARD_ENABLED = new_state
-                    TAKEOFF_GUARD_ENABLED = new_state
-                    self.status_banner = f">> Flight Safeguards (AUTO+TAKEOFF): {'AKTIF' if new_state else 'BYPASS (BENCH TEST)'}"
-                    self.status_timer = time.time() + 3.0
-                elif key in [ord('g'), ord('G')]:
-                    LEVEL_GUARD_ENABLED = not LEVEL_GUARD_ENABLED
-                    self.status_banner = f">> Level Guard: {'AKTIF' if LEVEL_GUARD_ENABLED else 'NONAKTIF (BYPASS)'}"
                     self.status_timer = time.time() + 2.5
                 elif key == 32: # SPACE
                     self.enhancer.enabled = not self.enhancer.enabled

@@ -72,35 +72,25 @@ Sesuai regulasi Teknofest, mekanisme penjatuhan payload menggunakan aturan **Cro
 
 | Target Terdeteksi di Lapangan | Aksi Dropping Wahana | Channel Servo FC | PWM Standby | PWM Drop |
 | :--- | :--- | :---: | :---: | :---: |
-| **`square_blue`** (Terpal Biru) | 🔴 **Jatuhkan Payload MERAH** | **Servo 7** (AUX 1) | `1000` | `2200` |
-| **`square_red`** (Terpal Merah) | 🔵 **Jatuhkan Payload BIRU** | **Servo 8** (AUX 2) | `1000` | `2200` |
+| **`square_blue`** (Terpal Biru) | 🔴 **Jatuhkan Payload MERAH** | **Servo 7** (AUX 1) | `1100` | `2200` |
+| **`square_red`** (Terpal Merah) | 🔵 **Jatuhkan Payload BIRU** | **Servo 8** (AUX 2) | `2100` | `1100` |
 
-### Sistem Pengaman Deteksi & Dropping (4-Layer Zero Mistake Flight Safeguards):
-Dropping payload otomatis **hanya akan dieksekusi jika keempat kondisi penerbangan berikut terpenuhi secara simultan**:
+### Sistem Kontrol Deteksi, Dropping & Target Invalid:
+Sistem beroperasi dalam mode **Direct Action (Tanpa Blokir Safeguard)** dengan kendali penuh di tangan operator:
 
-1. **Layer 1 - AUTO Mode Guard**:
-   * Pesawat **harus sedang dalam mode penerbangan `AUTO`** (Mode 10 ArduPlane).
-   * Jika pilot sedang menerbangkan pesawat dalam mode manual (`MANUAL`, `STABILIZE`, `FBWA`, `CRUISE`, dll.), dropping otomatis terkunci (**HOLD**) demi keselamatan wahana dan kru di darat.
-2. **Layer 2 - Takeoff Altitude Guard**:
-   * Divalidasi **murni dari Ketinggian Relatif (Altitude AGL)** tanpa ketergantungan arming:
-     - Ketinggian pesawat **harus $\ge 30.0$ meter di atas tanah** (atau $\ge 30\%$ dari target ketinggian misi).
-     - Menjamin payload tidak akan pernah lepas saat pesawat masih di meja persiapan atau di landasan pacu (*runway*).
-3. **Layer 3 - Attitude Level Flight Guard**:
-   * Pesawat **harus dalam kondisi terbang datar dan stabil**:
-     - **Roll**: Maksimal $\pm 10^\circ$ (`-10 deg <= Roll <= +10 deg`)
-     - **Pitch**: Maksimal $\pm 8^\circ$ (`-8 deg <= Pitch <= +8 deg`)
-   * Jika pesawat sedang bermanuver belok tajam (*banking*) saat melintas di atas target, dropping di-**HOLD** hingga pesawat kembali datar agar payload jatuh tegak lurus ke sasaran.
-4. **Layer 4 - Target Waypoint Guard**:
-   * Deteksi YOLO dan dropping **HANYA mulai aktif saat pesawat berada pada nomor Waypoint tertentu** yang Anda tentukan (misal: `TARGET_WAYPOINTS = [3]` atau `[3, 4]`).
-   * Saat pesawat masih berada di Waypoint sebelumnya (misal WP 1 atau WP 2 saat memanjat / transit), pipeline citra berada dalam status **`STANDBY WP GUARD`**, menghemat beban CPU dan mengeliminasi 100% risiko salah deteksi objek acak di luar area penjatuhan.
-
-> **💡 Catatan Uji Meja (Bench Testing)**:
-> Saat menguji mekanik servo di meja persiapan tanpa terbang, tekan tombol **`[F]`** pada keyboard untuk mengaktifkan **Bypass Mode** (AUTO & Takeoff dimatikan sementara), dan tekan **`[W]`** untuk menonaktifkan Waypoint Guard, atau gunakan tombol manual `[1]`, `[2]`, `[3]`, `[4]`.
-
-5. **Confidence Threshold Minimal 80% (0.80)**: Menghindari deteksi semu akibat pantulan cahaya.
-6. **OpenCV HSV Color Guard**: Memverifikasi secara matematis bahwa kotak deteksi benar-benar memiliki spektrum warna biru/merah asli di lapangan.
-7. **Anti-Glitch Debounce (2 Frame Konsekutif)**: Mencegah pelepasan akibat anomali frame sesaat (1 frame error).
-8. **Single-Drop Latch**: Setiap payload terkunci hanya bisa jatuh **satu kali secara otomatis**. Tidak akan terjadi *double dropping* saat target masih terlihat di kamera.
+1. **Master Toggle [CTRL]**:
+   - Proses inferensi deteksi target dan pengiriman perintah dropping otomatis dapat dinyalakan atau dijeda seketika dengan menekan tombol **`[CTRL]`** pada keyboard atau mengklik kartu master di GUI.
+   - Status live terlihat jelas di HUD: **`● DETEKSI & DROP: AKTIF`** (Hijau) vs **`○ DETEKSI & DROP: PAUSED`** (Oranye).
+2. **Proteksi Target Invalid (`hexagon_blue` & `triangle_red`)**:
+   - Model YOLO mendeteksi 4 kelas: `0: triangle_red`, `1: hexagon_blue`, `2: square_red`, `3: square_blue`.
+   - Objek `triangle_red` dan `hexagon_blue` **tetap digambar kotak pembatasnya (bounding box)** di layar dengan tag **`[INVALID]`**, namun **TIDAK PERNAH mengirimkan perintah dropping ke Flight Controller**.
+3. **Kontrol Tombol Samping Mouse (Fantech & Gaming Mouse)**:
+   - Dilengkapi pendeteksian hardware mouse tingkat rendah (*low-latency Windows API*) untuk 2 tombol jempol samping (*thumb side buttons*):
+     - **Tombol Samping Atas** (*Forward / Button 5*): Dropping manual untuk sasaran **Merah Square** (Cross-Drop: Servo 8 melepaskan Payload Biru).
+     - **Tombol Samping Bawah** (*Back / Button 4*): Dropping manual untuk sasaran **Biru Square** (Cross-Drop: Servo 7 melepaskan Payload Merah).
+   - Mode dapat disesuaikan pada variabel `MOUSE_SIDE_BUTTON_MODE = "TARGET"` atau `"PAYLOAD"`.
+4. **Telemetri Monitoring Pasif**:
+   - Data sikap wahana (Roll, Pitch, Altitude AGL, Flight Mode) tetap dimonitor dan ditampilkan secara halus di HUD sebagai referensi visual pilot tanpa mengunci (*HOLD*) servo.
 
 ---
 
@@ -120,30 +110,21 @@ python teknofest_dual_dropping_mission.py
    * `[2]` Berkas Video rekaman di folder `vid_input/` (untuk pengujian offline).
 3. **Pilih Model Deteksi YOLO (.onnx)**:
    * `[1]` `v1_gazbmodel_exp.onnx` [DEFAULT]
-   * `[2]` `v2.onnx` (atau berkas model baru lainnya yang ditaruh di folder ini).
+   * `[2]` `v1main.onnx` / `v2.onnx` (atau berkas model baru lainnya).
 4. **Buka Mission Planner** $\rightarrow$ Pilih **`UDP`** di pojok kanan atas $\rightarrow$ Klik **`Connect`** (Port: `14550`).
 5. **Hasil**: Mission Planner langsung terkoneksi dalam **0.2 detik dengan Sinyal 100% dan Zero Packet Loss**, sementara script otonom mendeteksi target dan siap melakukan dropping secara simultan!
-
-### Menjalankan Tanpa Interaksi (100% Otomatis)
-```powershell
-# Langsung buka COM7, Kamera Index 0, Model v1, dan Aktif di WP 3:
-python teknofest_dual_dropping_mission.py -p COM7 -b 57600 -c 0 -m v1_gazbmodel_exp.onnx --wp 3
-
-# Menjalankan aktif pada rentang Waypoint 3 sampai 5 (WP 3, 4, 5):
-python teknofest_dual_dropping_mission.py -p COM7 -c 0 -m v2.onnx --wp 3-5
-
-# Menggunakan file video rekaman dan Model v2 (Mode Uji Coba):
-python teknofest_dual_dropping_mission.py -p COM7 --video "vid_input/20110814_042946.avi" -m v2.onnx --sim
-```
 
 ---
 
 ## 🎛️ Kontrol GUI & Tombol Interaktif
 
-Di layar GUI terdapat panel samping kanan dengan **5 Tombol Uji Interaktif** yang dapat diklik langsung dengan mouse atau ditekan melalui keyboard:
+Di layar GUI terdapat panel samping kanan dengan tombol uji interaktif yang dapat diklik langsung dengan mouse atau ditekan melalui keyboard:
 
-| Tombol GUI | Shortcut Keyboard | Fungsi Aksi |
+| Kontrol Input | Pintasan / Tombol | Fungsi Aksi |
 | :--- | :---: | :--- |
+| **Toggle Deteksi & Auto-Drop** | **`[CTRL]`** / Klik Kartu | **Menyalakan / Menjeda (Pause) deteksi & perintah dropping otomatis**. |
+| **Dropping Merah Square** | **`[Side Btn Atas]`** | **Dropping manual sasaran Merah Square** (Servo 8 $\rightarrow$ 1100 PWM lepas Payload Biru). |
+| **Dropping Biru Square** | **`[Side Btn Bawah]`** | **Dropping manual sasaran Biru Square** (Servo 7 $\rightarrow$ 2200 PWM lepas Payload Merah). |
 | **`[1] MANUAL DROP MERAH`** | **`[1]`** | Memicu pelepasan manual Payload Merah (Servo 7 $\rightarrow$ 2200 PWM). |
 | **`[2] RESET SERVO MERAH`** | **`[2]`** | Mengembalikan Servo Merah ke posisi kunci (Servo 7 $\rightarrow$ 1100 PWM). |
 | **`[3] MANUAL DROP BIRU`** | **`[3]`** | Memicu pelepasan manual Payload Biru (Servo 8 $\rightarrow$ 1100 PWM). |
@@ -151,9 +132,7 @@ Di layar GUI terdapat panel samping kanan dengan **5 Tombol Uji Interaktif** yan
 | **`[X] RESET SEMUA SERVO`** | **`[X]`** | Mengembalikan kedua servo secara bersamaan ke posisi standby. |
 | **`TOGGLE ENHANCER` (Card)** | **`[SPACE]`** | **Toggle Video Enhancer ON/OFF** (Default: **NONAKTIF / Raw Camera**). Status live terlihat pada badge video & kartu sidebar. |
 | **Toggle Rekam Video** | **`[R]`** | **Mulai / Hentikan Rekam Video Full** ke folder `video_rec/` (`rec_YYYYMMDD_HHMMSS.mp4`). |
-| **Toggle Waypoint Guard** | **`[W]`** | Mengaktifkan / menonaktifkan batasan Waypoint (Bypass ke semua WP). |
-| **Toggle Flight Safeguards** | **`[F]`** | Mengaktifkan / menonaktifkan Guard Mode AUTO & Takeoff (Bypass untuk bench test di darat). |
-| **Toggle Level Guard** | **`[G]`** | Mengaktifkan / menonaktifkan Attitude Level Guard (Bypass untuk bench test). |
+| **Keluar** | **`[Q]` / `[ESC]`** | Menutup program dan melepaskan port secara aman. |ttitude Level Guard (Bypass untuk bench test). |
 | **Keluar** | **`[Q]` / `[ESC]`** | Menutup program dan melepaskan port secara aman. |
 
 ---
