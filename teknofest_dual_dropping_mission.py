@@ -86,7 +86,7 @@ PWM_BLUE_START = 2100          # PWM Standby / Kunci Payload
 PWM_BLUE_DROP = 1100           # PWM Release / Buka Kunci Dropping
 
 # -- MASTER DETECTION & AUTO-DROP TOGGLE (NO SAFEGUARD DIRECT ACTION)
-AUTO_DETECTION_DEFAULT = True       # Status awal deteksi & dropping otomatis (Toggle via tombol [CTRL])
+AUTO_DETECTION_DEFAULT = False      # Status awal deteksi & dropping otomatis (Toggle via tombol [CTRL])
 
 # -- MOUSE SIDE BUTTON MAPPING (Fantech & Gaming Mouse 2 Side Buttons)
 # Mode "TARGET" (Sesuai Regulasi Teknofest Cross-Drop):
@@ -136,7 +136,7 @@ def normalize_waypoints(wps):
     return [3]
 
 # -- YOLO & VISION CONFIGURATION
-YOLO_MODEL_PATH = "v1_gazbmodel_exp.onnx"
+YOLO_MODEL_PATH = "v1main.onnx"
 YOLO_INPUT_SIZE = 640
 YOLO_CONF_THRESHOLD = 0.80     # Minimal Confidence 80% (0.80)
 MIN_CONSECUTIVE_FRAMES = 2     # Minimal 2 frame berturut-turut terdeteksi (Anti-Glitch)
@@ -710,7 +710,7 @@ class TeknofestDualDroppingMission:
         # UI & Buttons
         self.buttons = []
         self.detection_active = AUTO_DETECTION_DEFAULT  # Master Toggle Deteksi & Dropping [CTRL]
-        self.status_banner = "SISTEM SIAP: Deteksi & Drop [AKTIF]"
+        self.status_banner = "SISTEM SIAP: Deteksi & Drop [AKTIF]" if self.detection_active else "SISTEM SIAP: Deteksi & Drop [PAUSED]"
         self.status_timer = time.time() + 4.0
 
         # Video Recorder & Detection Proof Logger
