@@ -59,9 +59,9 @@ import onnxruntime as ort
 # ==============================================================================
 # KONFIGURASI GLOBAL
 # ==============================================================================
-YOLO_MODEL_PATH = "v1_gazbmodel_exp.onnx"
+YOLO_MODEL_PATH = "v1main.onnx"
 YOLO_INPUT_SIZE = 640
-DEFAULT_CONF_THRESHOLD = 0.80     # Default 80%
+DEFAULT_CONF_THRESHOLD = 0.50     # Default 50%
 
 # Folder Penyimpanan:
 INPUT_VID_DIRS = ["vid_input", "vid input"] # Folder sumber video pengujian
@@ -263,22 +263,53 @@ class YoloDetector:
         tensor = tensor[None]
 
         # ONNX Run
-        preds = self.session.run(None, {self.input_name: tensor})[0][0]
+        raw_output = self.session.run(None, {self.input_name: tensor})[0]
+
+        # Universal Parser (mendukung format [1, 8, 8400] dan [1, N, 6])
+        parsed = []
+        out = raw_output
+        if out.ndim == 3 and out.shape[2] == 6:
+            out = out[0]
+        if out.ndim == 2 and out.shape[1] == 6:
+            for row in out:
+                c = float(row[4])
+                if c >= self.conf_threshold:
+                    parsed.append({'box': [float(v) for v in row[:4]], 'conf': c, 'class_id': int(row[5])})
+        elif out.ndim == 3 and out.shape[1] < out.shape[2]:
+            preds = np.transpose(out[0], (1, 0))
+            boxes_cxcywh = preds[:, :4]
+            scores = preds[:, 4:]
+            cids = np.argmax(scores, axis=1)
+            confs = np.max(scores, axis=1)
+            mask = confs >= self.conf_threshold
+            if np.any(mask):
+                f_boxes = boxes_cxcywh[mask]
+                f_confs = confs[mask]
+                f_cids = cids[mask]
+                nms_boxes = []
+                x1y1x2y2 = []
+                for b in f_boxes:
+                    cx, cy, bw, bh = b
+                    x1 = cx - bw / 2.0
+                    y1 = cy - bh / 2.0
+                    nms_boxes.append([int(x1), int(y1), int(bw), int(bh)])
+                    x1y1x2y2.append((x1, y1, x1 + bw, y1 + bh))
+                idxs = cv2.dnn.NMSBoxes(nms_boxes, [float(c) for c in f_confs], self.conf_threshold, 0.45)
+                for idx in idxs:
+                    i = int(idx)
+                    parsed.append({'box': x1y1x2y2[i], 'conf': float(f_confs[i]), 'class_id': int(f_cids[i])})
 
         detections = []
-        for row in preds:
-            conf = float(row[4])
-            if conf < self.conf_threshold:
-                continue
-
-            class_id = int(row[5])
+        for det in parsed:
+            conf = det['conf']
+            class_id = det['class_id']
             label = self.classes.get(class_id, str(class_id)).lower()
 
-            x1, y1, x2, y2 = [float(v) for v in row[:4]]
-            x1 = max(0, min(w - 1, int(round((x1 - pad_x) / scale))))
-            x2 = max(0, min(w - 1, int(round((x2 - pad_x) / scale))))
-            y1 = max(0, min(h - 1, int(round((y1 - pad_y) / scale))))
-            y2 = max(0, min(h - 1, int(round((y2 - pad_y) / scale))))
+            bx1, by1, bx2, by2 = det['box']
+            x1 = max(0, min(w - 1, int(round((bx1 - pad_x) / scale))))
+            x2 = max(0, min(w - 1, int(round((bx2 - pad_x) / scale))))
+            y1 = max(0, min(h - 1, int(round((by1 - pad_y) / scale))))
+            y2 = max(0, min(h - 1, int(round((by2 - pad_y) / scale))))
 
             if x2 <= x1 or y2 <= y1:
                 continue

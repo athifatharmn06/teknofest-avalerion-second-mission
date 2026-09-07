@@ -138,7 +138,7 @@ def normalize_waypoints(wps):
 # -- YOLO & VISION CONFIGURATION
 YOLO_MODEL_PATH = "v1main.onnx"
 YOLO_INPUT_SIZE = 640
-YOLO_CONF_THRESHOLD = 0.70     # Minimal Confidence 70% (0.70)
+YOLO_CONF_THRESHOLD = 0.50     # Minimal Confidence 50% (0.50)
 MIN_CONSECUTIVE_FRAMES = 2     # Minimal 2 frame berturut-turut terdeteksi (Anti-Glitch)
 
 # -- HSV COLOR GUARD FILTER
@@ -653,6 +653,81 @@ def preprocess_yolo(frame):
     return tensor[None], scale, pad_x, pad_y
 
 
+def parse_yolo_predictions(raw_output, conf_threshold=0.50, nms_threshold=0.45):
+    """
+    Universal parser for YOLO ONNX outputs:
+    1. End-to-end NMS format: (1, N, 6) or (N, 6) -> [x1, y1, x2, y2, conf, class_id]
+       (Contoh: v1_gazbmodel_exp.onnx)
+    2. Standard YOLOv8/v11 format: (1, 4 + C, N) or (1, N, 4 + C) -> [cx, cy, w, h, class_scores...]
+       (Contoh: v1main.onnx, v2_medium.onnx, v2_small.onnx)
+    Returns list of dicts: [{'box': (x1, y1, x2, y2), 'conf': float, 'class_id': int}]
+    """
+    out = raw_output
+    if isinstance(out, (list, tuple)):
+        out = out[0]
+
+    # Format 1: End-to-End NMS format [1, N, 6] atau [N, 6]
+    if out.ndim == 3 and out.shape[2] == 6:
+        out = out[0]
+    if out.ndim == 2 and out.shape[1] == 6:
+        results = []
+        for row in out:
+            conf = float(row[4])
+            if conf >= conf_threshold:
+                x1, y1, x2, y2 = [float(v) for v in row[:4]]
+                cid = int(row[5])
+                results.append({'box': (x1, y1, x2, y2), 'conf': conf, 'class_id': cid})
+        return results
+
+    # Format 2: Standard Ultralytics YOLOv8/v11 [1, 4+C, N] atau [1, N, 4+C]
+    if out.ndim == 3:
+        if out.shape[1] < out.shape[2]:  # (1, C, N) -> misal (1, 8, 8400)
+            preds = np.transpose(out[0], (1, 0))  # (8400, 8)
+        else:  # (1, N, C)
+            preds = out[0]
+    elif out.ndim == 2:
+        if out.shape[0] < out.shape[1]:
+            preds = np.transpose(out, (1, 0))
+        else:
+            preds = out
+    else:
+        return []
+
+    boxes_cxcywh = preds[:, :4]
+    scores = preds[:, 4:]
+    class_ids = np.argmax(scores, axis=1)
+    confs = np.max(scores, axis=1)
+
+    mask = confs >= conf_threshold
+    if not np.any(mask):
+        return []
+
+    filt_boxes = boxes_cxcywh[mask]
+    filt_confs = confs[mask]
+    filt_classes = class_ids[mask]
+
+    boxes_for_nms = []
+    boxes_x1y1x2y2 = []
+    for b in filt_boxes:
+        cx, cy, bw, bh = b
+        x1 = cx - bw / 2.0
+        y1 = cy - bh / 2.0
+        boxes_for_nms.append([int(x1), int(y1), int(bw), int(bh)])
+        boxes_x1y1x2y2.append((x1, y1, x1 + bw, y1 + bh))
+
+    indices = cv2.dnn.NMSBoxes(boxes_for_nms, [float(c) for c in filt_confs], conf_threshold, nms_threshold)
+    results = []
+    if len(indices) > 0:
+        for idx in indices:
+            i = int(idx)
+            results.append({
+                'box': boxes_x1y1x2y2[i],
+                'conf': float(filt_confs[i]),
+                'class_id': int(filt_classes[i])
+            })
+    return results
+
+
 # ==============================================================================
 # CLASS: TeknofestDualDroppingMission
 # ==============================================================================
@@ -1033,26 +1108,24 @@ class TeknofestDualDroppingMission:
                 self.proc_ms = (time.time() - t_start) * 1000.0
                 return frame
 
-        # YOLO Inference (Tetap dijalankan agar bounding box selalu tampil di layar)
+        # YOLO Inference (Universal parser mendukung format v1main [1, 8, 8400] & format lama [1, 300, 6])
         tensor, scale, pad_x, pad_y = preprocess_yolo(frame)
-        raw_preds = self.yolo_session.run(None, {self.yolo_input_name: tensor})[0][0]
+        raw_output = self.yolo_session.run(None, {self.yolo_input_name: tensor})[0]
+        parsed_detections = parse_yolo_predictions(raw_output, conf_threshold=YOLO_CONF_THRESHOLD, nms_threshold=0.45)
 
         detected_blue = None
         detected_red = None
 
-        for row in raw_preds:
-            conf = float(row[4])
-            if conf < YOLO_CONF_THRESHOLD:
-                continue
-
-            class_id = int(row[5])
+        for det in parsed_detections:
+            conf = det['conf']
+            class_id = det['class_id']
             label = self.yolo_names.get(class_id, str(class_id)).lower()
 
-            x1, y1, x2, y2 = [float(v) for v in row[:4]]
-            x1 = max(0, min(w - 1, int(round((x1 - pad_x) / scale))))
-            x2 = max(0, min(w - 1, int(round((x2 - pad_x) / scale))))
-            y1 = max(0, min(h - 1, int(round((y1 - pad_y) / scale))))
-            y2 = max(0, min(h - 1, int(round((y2 - pad_y) / scale))))
+            bx1, by1, bx2, by2 = det['box']
+            x1 = max(0, min(w - 1, int(round((bx1 - pad_x) / scale))))
+            x2 = max(0, min(w - 1, int(round((bx2 - pad_x) / scale))))
+            y1 = max(0, min(h - 1, int(round((by1 - pad_y) / scale))))
+            y2 = max(0, min(h - 1, int(round((by2 - pad_y) / scale))))
             if x2 <= x1 or y2 <= y1: continue
 
             center = ((x1 + x2) // 2, (y1 + y2) // 2)
