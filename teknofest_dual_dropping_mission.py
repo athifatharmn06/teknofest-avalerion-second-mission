@@ -31,6 +31,7 @@ import datetime
 import subprocess
 import importlib.util
 import ctypes
+from collections import deque
 from pathlib import Path
 
 # ==============================================================================
@@ -613,7 +614,7 @@ def letterbox(frame, size=YOLO_INPUT_SIZE, color=(114, 114, 114)):
     return canvas, scale, pad_x, pad_y
 
 
-def draw_fps_badge(image, fps, latency_ms=None, top_right_x=None, top_y=14):
+def draw_fps_badge(image, fps, latency_ms=None, cam_fps=None, top_right_x=None, top_y=14):
     """
     Menggambar badge FPS Counter HUD modern semi-transparan:
     - Hijau neon jika FPS >= 24 (Sangat lancar)
@@ -622,7 +623,13 @@ def draw_fps_badge(image, fps, latency_ms=None, top_right_x=None, top_y=14):
     """
     fps_val = max(0.0, fps)
     fps_text = f"{fps_val:4.1f} FPS"
-    lat_text = f"{latency_ms:4.1f} ms" if latency_ms is not None and latency_ms > 0 else ""
+    
+    parts = []
+    if latency_ms is not None and latency_ms > 0:
+        parts.append(f"Lat: {latency_ms:3.0f}ms")
+    if cam_fps is not None and cam_fps > 0:
+        parts.append(f"Cam: {cam_fps:2.0f}")
+    sub_text = " | ".join(parts)
 
     if fps_val >= 24.0:
         badge_c = (0, 255, 120)   # Neon Green
@@ -631,7 +638,7 @@ def draw_fps_badge(image, fps, latency_ms=None, top_right_x=None, top_y=14):
     else:
         badge_c = (0, 60, 255)    # Bright Red
 
-    bw, bh = (118, 42) if lat_text else (98, 28)
+    bw, bh = (128, 42) if sub_text else (98, 28)
     h_img, w_img = image.shape[:2]
     rx = (w_img - bw - 14) if top_right_x is None else (top_right_x - bw)
     ry = top_y
@@ -643,8 +650,8 @@ def draw_fps_badge(image, fps, latency_ms=None, top_right_x=None, top_y=14):
     cv2.rectangle(image, (rx, ry), (rx + bw, ry + bh), badge_c, 1)
 
     cv2.putText(image, fps_text, (rx + 8, ry + 20), cv2.FONT_HERSHEY_DUPLEX, 0.52, badge_c, 1, cv2.LINE_AA)
-    if lat_text:
-        cv2.putText(image, lat_text, (rx + 8, ry + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (210, 210, 210), 1, cv2.LINE_AA)
+    if sub_text:
+        cv2.putText(image, sub_text, (rx + 8, ry + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (210, 210, 210), 1, cv2.LINE_AA)
 
 
 def preprocess_yolo(frame):
@@ -774,6 +781,7 @@ class TeknofestDualDroppingMission:
         self.latest_enhanced = None
         self.new_frame = False
         self.cam_fps = 0.0
+        self.cam_timestamps = deque(maxlen=20)
         self.lock = threading.Lock()
 
         # YOLO Model
@@ -793,6 +801,7 @@ class TeknofestDualDroppingMission:
         self.proof_logger = DetectionProofLogger(base_dir=PROOF_BASE_DIR)
         self.frame_counter = 0
         self.pipeline_fps = 0.0
+        self.fps_timestamps = deque(maxlen=20)
         self.proc_ms = 0.0
 
         # Start Camera
@@ -811,6 +820,7 @@ class TeknofestDualDroppingMission:
 
         print(f"[YOLO] Memuat model ONNX: {model_path}...")
         try:
+            ort.preload_dlls()
             # Force GPU execution (CUDA / DirectML) dengan fallback otomatis ke CPU
             available_p = ort.get_available_providers()
             gpu_providers = [p for p in ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"] if p in available_p]
@@ -878,8 +888,20 @@ class TeknofestDualDroppingMission:
             sys.exit(1)
 
         def camera_loop():
-            last_t = time.time()
+            vid_fps = 30.0
+            if is_video_file:
+                vid_fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frame_interval = 1.0 / vid_fps if is_video_file else 0.0
+            t_prev = time.perf_counter()
+
             while True:
+                if is_video_file and frame_interval > 0:
+                    elapsed = time.perf_counter() - t_prev
+                    sleep_needed = frame_interval - elapsed
+                    if sleep_needed > 0:
+                        time.sleep(sleep_needed)
+                    t_prev = time.perf_counter()
+
                 ret, frame = self.cap.read()
                 if not ret or frame is None:
                     if is_video_file:
@@ -898,12 +920,12 @@ class TeknofestDualDroppingMission:
                     self.latest_enhanced = enhanced
                     self.new_frame = True
 
-                now = time.time()
-                dt = now - last_t
-                if dt > 0:
-                    inst = 1.0 / dt
-                    self.cam_fps = (0.85 * self.cam_fps) + (0.15 * inst) if self.cam_fps > 0 else inst
-                last_t = now
+                t_read = time.perf_counter()
+                self.cam_timestamps.append(t_read)
+                if len(self.cam_timestamps) >= 2:
+                    dt_cam = self.cam_timestamps[-1] - self.cam_timestamps[0]
+                    if dt_cam > 0:
+                        self.cam_fps = (len(self.cam_timestamps) - 1) / dt_cam
 
         t = threading.Thread(target=camera_loop, daemon=True, name="CameraWorker")
         t.start()
@@ -1094,7 +1116,7 @@ class TeknofestDualDroppingMission:
         return cv2.countNonZero(mask) >= MIN_ROI_COLOR_PIXELS
 
     def process_vision(self):
-        t_start = time.time()
+        t_start = time.perf_counter()
         with self.lock:
             if not self.new_frame or self.latest_enhanced is None:
                 return None
@@ -1117,7 +1139,7 @@ class TeknofestDualDroppingMission:
                 self.frame_counter += 1
                 if self.recorder.is_recording:
                     self.recorder.write(frame)
-                self.proc_ms = (time.time() - t_start) * 1000.0
+                self.proc_ms = (time.perf_counter() - t_start) * 1000.0
                 return frame
 
         # YOLO Inference (Universal parser mendukung format v1main [1, 8, 8400] & format lama [1, 300, 6])
@@ -1261,7 +1283,7 @@ class TeknofestDualDroppingMission:
             info = f"Alt:{rel_alt:.1f}m | SQUARE RED -> {act_red}"
             self.proof_logger.log_detection(frame, "square_red", detected_red["conf"], self.frame_counter, info)
 
-        self.proc_ms = (time.time() - t_start) * 1000.0
+        self.proc_ms = (time.perf_counter() - t_start) * 1000.0
         return frame
 
     # ==========================================================================
@@ -1306,7 +1328,7 @@ class TeknofestDualDroppingMission:
         cv2.putText(canvas, enh_badge_txt, (36, enh_badge_y + 16), cv2.FONT_HERSHEY_DUPLEX, 0.38, enh_badge_col, 1, cv2.LINE_AA)
 
         # Badge FPS Counter Modern di Pojok Kanan Atas Area Video
-        draw_fps_badge(canvas, fps=self.pipeline_fps, latency_ms=self.proc_ms, top_right_x=scaled_w - 14, top_y=14)
+        draw_fps_badge(canvas, fps=self.pipeline_fps, latency_ms=self.proc_ms, cam_fps=self.cam_fps, top_right_x=scaled_w - 14, top_y=14)
 
         p_x = scaled_w
 
@@ -1477,7 +1499,7 @@ class TeknofestDualDroppingMission:
         model_name = Path(self.model_path).name
         alt_val = f"{self.bridge.relative_alt:.1f}m" if self.bridge else "N/A"
         mode_val = self.bridge.mode_name if self.bridge else "N/A"
-        info_txt = f"FPS: {self.pipeline_fps:4.1f} | Lat: {self.proc_ms:3.0f}ms | {det_s} | Enh: {enh_status} | Alt: {alt_val} | Mode: {mode_val} | {model_name}"
+        info_txt = f"FPS: {self.pipeline_fps:4.1f} | Cam: {self.cam_fps:4.1f} | Lat: {self.proc_ms:3.0f}ms | {det_s} | Enh: {enh_status} | Alt: {alt_val} | Mode: {mode_val} | {model_name}"
         cv2.putText(hud_bar, info_txt, (15, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1, cv2.LINE_AA)
 
         if time.time() < self.status_timer and self.status_banner:
@@ -1545,8 +1567,8 @@ class TeknofestDualDroppingMission:
         print("  [Q] / [ESC]         : Keluar")
         print("=" * 65 + "\n")
 
-        fps_timer = time.time()
-        fps_frames = 0
+        self.fps_timestamps.clear()
+        self.cam_timestamps.clear()
         self.pipeline_fps = 0.0
 
         # State Edge Detection untuk Tombol Windows (CTRL & Tombol Samping Mouse)
@@ -1593,17 +1615,18 @@ class TeknofestDualDroppingMission:
                 # 1. Vision YOLO & Color Guard
                 processed_frame = self.process_vision()
                 if processed_frame is None:
-                    time.sleep(0.005)
+                    if len(self.fps_timestamps) > 0 and (time.perf_counter() - self.fps_timestamps[-1]) > 1.0:
+                        self.pipeline_fps = 0.0
+                    time.sleep(0.003)
                     continue
 
-                # Update Pipeline FPS
-                now = time.time()
-                fps_frames += 1
-                dt = now - fps_timer
-                if dt >= 0.5:
-                    self.pipeline_fps = fps_frames / dt
-                    fps_frames = 0
-                    fps_timer = now
+                # Update Real-Time Pipeline FPS via Rolling Window (time.perf_counter)
+                t_now = time.perf_counter()
+                self.fps_timestamps.append(t_now)
+                if len(self.fps_timestamps) >= 2:
+                    total_dt = self.fps_timestamps[-1] - self.fps_timestamps[0]
+                    if total_dt > 0:
+                        self.pipeline_fps = (len(self.fps_timestamps) - 1) / total_dt
 
                 # 2. Render GUI & Buttons
                 gui_view = self.render_gui(processed_frame)
