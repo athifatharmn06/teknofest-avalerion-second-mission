@@ -89,14 +89,10 @@ PWM_BLUE_DROP = 1100           # PWM Release / Buka Kunci Dropping
 # -- MASTER DETECTION & AUTO-DROP TOGGLE (NO SAFEGUARD DIRECT ACTION)
 AUTO_DETECTION_DEFAULT = False      # Status awal deteksi & dropping otomatis (Toggle via tombol [CTRL])
 
-# -- MOUSE SIDE BUTTON MAPPING (Fantech & Gaming Mouse 2 Side Buttons)
-# Mode "TARGET" (Sesuai Regulasi Teknofest Cross-Drop):
-#   - Side Button Atas  (Forward / Button 5): Sasaran MERAH SQUARE -> Drop Payload BIRU (Servo 8)
-#   - Side Button Bawah (Back / Button 4)   : Sasaran BIRU SQUARE  -> Drop Payload MERAH (Servo 7)
-# Mode "PAYLOAD" (Direct Servo Color):
-#   - Side Button Atas  (Forward / Button 5): Drop Langsung Payload MERAH (Servo 7)
-#   - Side Button Bawah (Back / Button 4)   : Drop Langsung Payload BIRU (Servo 8)
-MOUSE_SIDE_BUTTON_MODE = "TARGET"  # "TARGET" atau "PAYLOAD"
+# -- MOUSE SIDE BUTTON MAPPING (Fantech & Gaming Mouse)
+#   - Side Button Atas  (Forward / Button 5): Drop Payload MERAH (Servo 7)
+#   - Side Button Bawah (Back / Button 4)   : Drop Payload BIRU (Servo 8)
+MOUSE_SIDE_BUTTON_MODE = "PAYLOAD"
 
 # Virtual Key Codes Windows (ctypes GetAsyncKeyState)
 VK_CONTROL = 0x11   # Tombol CTRL (Modifier Toggle Deteksi & Dropping)
@@ -980,30 +976,18 @@ class TeknofestDualDroppingMission:
     def handle_side_button_top(self):
         """
         Tombol Samping Atas Mouse (Forward / VK_XBUTTON2):
-        Memicu pelepasan dropping untuk sasaran MERAH SQUARE.
+        Drop Payload MERAH (Servo Channel 7).
         """
-        if MOUSE_SIDE_BUTTON_MODE == "TARGET":
-            # Target Square Red -> Sesuai aturan Teknofest melepaskan Payload Biru (Servo 8)
-            print("\n[MOUSE] SIDE BUTTON TOP -> SASARAN MERAH SQUARE -> TRIGGER DROP BIRU (SERVO 8)")
-            self.trigger_drop_blue("SIDE BUTTON TOP [TARGET MERAH SQUARE]")
-        else:
-            # Mode Direct Payload: Lepas Payload Merah (Servo 7)
-            print("\n[MOUSE] SIDE BUTTON TOP -> TRIGGER DROP MERAH (SERVO 7)")
-            self.trigger_drop_red("SIDE BUTTON TOP [PAYLOAD MERAH]")
+        print("\n[MOUSE] SIDE BUTTON TOP -> TRIGGER DROP MERAH (SERVO 7)")
+        self.trigger_drop_red("SIDE BUTTON TOP [PAYLOAD MERAH]")
 
     def handle_side_button_bottom(self):
         """
         Tombol Samping Bawah Mouse (Back / VK_XBUTTON1):
-        Memicu pelepasan dropping untuk sasaran BIRU SQUARE.
+        Drop Payload BIRU (Servo Channel 8).
         """
-        if MOUSE_SIDE_BUTTON_MODE == "TARGET":
-            # Target Square Blue -> Sesuai aturan Teknofest melepaskan Payload Merah (Servo 7)
-            print("\n[MOUSE] SIDE BUTTON BOTTOM -> SASARAN BIRU SQUARE -> TRIGGER DROP MERAH (SERVO 7)")
-            self.trigger_drop_red("SIDE BUTTON BOTTOM [TARGET BIRU SQUARE]")
-        else:
-            # Mode Direct Payload: Lepas Payload Biru (Servo 8)
-            print("\n[MOUSE] SIDE BUTTON BOTTOM -> TRIGGER DROP BIRU (SERVO 8)")
-            self.trigger_drop_blue("SIDE BUTTON BOTTOM [PAYLOAD BIRU]")
+        print("\n[MOUSE] SIDE BUTTON BOTTOM -> TRIGGER DROP BIRU (SERVO 8)")
+        self.trigger_drop_blue("SIDE BUTTON BOTTOM [PAYLOAD BIRU]")
 
     def get_attitude(self):
         if self.bridge is not None:
@@ -1355,15 +1339,12 @@ class TeknofestDualDroppingMission:
         cv2.putText(canvas, status_txt, (p_x + 34, y_pos + 22), cv2.FONT_HERSHEY_DUPLEX, 0.44, status_col, 1, cv2.LINE_AA)
 
         # Subtitle Action Mode
-        mode_label = "MODE: TARGET (Cross-Drop)" if MOUSE_SIDE_BUTTON_MODE == "TARGET" else "MODE: DIRECT PAYLOAD"
-        cv2.putText(canvas, f"Safeguard: BYPASS | {mode_label}", (p_x + 18, y_pos + 42), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(canvas, "Safeguard: BYPASS | DIRECT PAYLOAD DROP", (p_x + 18, y_pos + 42), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
 
         # Mouse Side Buttons Guide
         cv2.putText(canvas, "TOMBOL SAMPING MOUSE (FANTECH):", (p_x + 18, y_pos + 62), cv2.FONT_HERSHEY_DUPLEX, 0.38, (0, 220, 255), 1)
-        side_top_desc = "Drop Merah Square (Servo 8)" if MOUSE_SIDE_BUTTON_MODE == "TARGET" else "Drop Payload Merah (Servo 7)"
-        side_bot_desc = "Drop Biru Square (Servo 7)" if MOUSE_SIDE_BUTTON_MODE == "TARGET" else "Drop Payload Biru (Servo 8)"
-        cv2.putText(canvas, f" * Top/Fwd : {side_top_desc}", (p_x + 18, y_pos + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (230, 230, 230), 1, cv2.LINE_AA)
-        cv2.putText(canvas, f" * Bot/Back: {side_bot_desc}", (p_x + 18, y_pos + 98), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (230, 230, 230), 1, cv2.LINE_AA)
+        cv2.putText(canvas, " * Top/Fwd : Drop Payload Merah (Servo 7)", (p_x + 18, y_pos + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (230, 230, 230), 1, cv2.LINE_AA)
+        cv2.putText(canvas, " * Bot/Back: Drop Payload Biru (Servo 8)", (p_x + 18, y_pos + 98), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (230, 230, 230), 1, cv2.LINE_AA)
 
         # Daftarkan tombol interaktif untuk Deteksi Master Card
         self.buttons.append({
@@ -1553,10 +1534,10 @@ class TeknofestDualDroppingMission:
         det_st = "AKTIF" if self.detection_active else "NONAKTIF"
         print(f"  -> Deteksi & Auto-Drop : [{det_st}]")
         print(f"  -> Video Enhancer      : {'[AKTIF (Clean V2)]' if self.enhancer.enabled else '[NONAKTIF / RAW (Tekan SPACE utk aktifkan)]'}")
-        print(f"  -> Mode Tombol Samping : {MOUSE_SIDE_BUTTON_MODE} (Cross-Drop Sesuai Regulasi)")
+        print(f"  -> Mode Tombol Samping : DIRECT PAYLOAD (Atas -> Merah, Bawah -> Biru)")
         print("  [CTRL]              : Toggle Deteksi & Auto-Dropping ON/OFF")
-        print("  [Side Btn Atas]     : Drop Merah Square (Forward Thumb Btn)")
-        print("  [Side Btn Bawah]    : Drop Biru Square (Back Thumb Btn)")
+        print("  [Side Btn Atas]     : Drop Payload Merah (Servo 7 -> Drop PWM)")
+        print("  [Side Btn Bawah]    : Drop Payload Biru (Servo 8 -> Drop PWM)")
         print("  [1]                 : Trigger Drop Merah (Servo 7 -> Drop PWM)")
         print("  [2]                 : Reset Servo Merah (Servo 7 -> Start PWM)")
         print("  [3]                 : Trigger Drop Biru (Servo 8 -> Drop PWM)")
