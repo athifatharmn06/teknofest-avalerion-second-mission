@@ -86,7 +86,7 @@ PWM_BLUE_START = 2100          # PWM Standby / Kunci Payload
 PWM_BLUE_DROP = 1100           # PWM Release / Buka Kunci Dropping
 
 # -- MASTER DETECTION & AUTO-DROP TOGGLE (NO SAFEGUARD DIRECT ACTION)
-AUTO_DETECTION_DEFAULT = True      # Status awal deteksi & dropping otomatis (Toggle via tombol [CTRL])
+AUTO_DETECTION_DEFAULT = True       # Status awal deteksi & dropping otomatis (Toggle via tombol [CTRL])
 
 # -- MOUSE SIDE BUTTON MAPPING (Fantech & Gaming Mouse 2 Side Buttons)
 # Mode "TARGET" (Sesuai Regulasi Teknofest Cross-Drop):
@@ -438,6 +438,7 @@ class MavlinkUnifiedBridge:
             self.ser = serial.Serial(self.serial_port, baudrate=self.baud_rate, timeout=0.001, write_timeout=0.05)
         except Exception as e:
             print(f"[MAVLINK ERROR] Gagal membuka port {self.serial_port}: {e}")
+            print(f"[MAVLINK WARNING] Berjalan dalam mode BYPASS/SIMULASI SERIAL (Perintah servo tetap dicatat & disimulasikan).")
             return False
 
         self.running = True
@@ -455,6 +456,8 @@ class MavlinkUnifiedBridge:
         return True
 
     def request_streams(self, rate_hz=10):
+        if self.ser is None or not getattr(self.ser, 'is_open', False):
+            return
         try:
             req = self.mav.request_data_stream_encode(
                 self.target_system, self.target_component,
@@ -466,6 +469,10 @@ class MavlinkUnifiedBridge:
 
     def send_servo_pwm(self, channel, pwm_value):
         """Kirim perintah DO_SET_SERVO langsung ke flight controller lewat serial"""
+        if self.ser is None or not getattr(self.ser, 'is_open', False):
+            print(f"[SERVO SIMULASI] Serial {self.serial_port} tidak aktif. Perintah Servo Channel {channel} -> {pwm_value} PWM dicatat (Mode Simulasi).")
+            return True
+
         try:
             msg = self.mav.command_long_encode(
                 self.target_system,
@@ -1596,24 +1603,47 @@ def interactive_setup():
     # 1. Deteksi & Pilih Port COM Telemetri
     com_ports = list(serial.tools.list_ports.comports())
     default_port = "COM7"
-    if com_ports:
-        print("\n" + "=" * 65)
-        print("   TEKNOFEST - DUAL PAYLOAD DROPPING MISSION CONTROL")
-        print("=" * 65)
-        print(" [1/3] Port COM Terdeteksi di PC:")
-        for idx, p in enumerate(com_ports, start=1):
-            print(f"  [{idx}] {p.device} - {p.description}")
-        print("=" * 65)
 
-        default_port = com_ports[0].device
-        p_choice = input(f"Pilih Port COM (1-{len(com_ports)}, tekan [ENTER] untuk default '{default_port}'): ").strip()
-        if p_choice.isdigit() and 1 <= int(p_choice) <= len(com_ports):
-            selected_port = com_ports[int(p_choice) - 1].device
-        else:
-            selected_port = default_port
+    print("\n" + "=" * 65)
+    print("   TEKNOFEST - DUAL PAYLOAD DROPPING MISSION CONTROL")
+    print("=" * 65)
+    print(" [1/3] Pilih Port Serial Telemetri (RFD900 / SiK Radio / USB Telem):")
+
+    if com_ports:
+        for idx, p in enumerate(com_ports, start=1):
+            tag = " [DEFAULT]" if p.device.upper() == default_port.upper() else ""
+            print(f"  [{idx}] {p.device} - {p.description}{tag}")
+        if default_port not in [x.device.upper() for x in com_ports]:
+            default_port = com_ports[0].device
+        print("  [M] Ketik manual nama port COM (misal COM3, COM7, /dev/ttyUSB0)")
+        print("  [S] Mode Simulasi / Tanpa Koneksi Serial Radio")
+        print("=" * 65)
+        p_prompt = f"Pilih Port COM (1-{len(com_ports)} / nama port / S, tekan [ENTER] utk default '{default_port}'): "
     else:
-        print(f"\n[MAVLINK] Tidak ada port COM terdeteksi. Menggunakan default '{default_port}'.")
+        print("  [!] Port serial tidak terdeteksi otomatis (pastikan modul tercolok).")
+        print(f"  -> Ketik nama port COM secara manual (misal: COM3, COM7, COM4)")
+        print(f"  -> Tekan [ENTER] untuk port default '{default_port}'")
+        print("  -> Atau ketik 'S' untuk Mode Simulasi (tanpa koneksi serial)")
+        print("=" * 65)
+        p_prompt = f"Pilih / Ketik Port COM (tekan [ENTER] utk '{default_port}', atau 'S' utk Simulasi): "
+
+    p_choice = input(p_prompt).strip()
+
+    if p_choice == "":
         selected_port = default_port
+    elif p_choice.upper() in ["S", "SIM", "NONE"]:
+        selected_port = "SIM"
+    elif com_ports and p_choice.isdigit() and 1 <= int(p_choice) <= len(com_ports):
+        selected_port = com_ports[int(p_choice) - 1].device
+    elif p_choice.isdigit():
+        selected_port = f"COM{p_choice}"
+    elif p_choice.upper().startswith("COM"):
+        selected_port = p_choice.upper()
+    elif p_choice.upper() == "M":
+        m_input = input("Masukkan nama port COM (misal COM7): ").strip()
+        selected_port = m_input.upper() if m_input.upper().startswith("COM") else (m_input if m_input else default_port)
+    else:
+        selected_port = p_choice
 
     # 2. Deteksi & Pilih Sumber Video Input
     print("\n" + "=" * 65)
