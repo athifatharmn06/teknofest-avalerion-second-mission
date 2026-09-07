@@ -703,7 +703,7 @@ class TeknofestDualDroppingMission:
         # UI & Buttons
         self.buttons = []
         self.detection_active = AUTO_DETECTION_DEFAULT  # Master Toggle Deteksi & Dropping [CTRL]
-        self.status_banner = "SISTEM SIAP: Deteksi & Drop [AKTIF] (Tekan CTRL utk Pause)"
+        self.status_banner = "SISTEM SIAP: Deteksi & Drop [AKTIF]"
         self.status_timer = time.time() + 4.0
 
         # Video Recorder & Detection Proof Logger
@@ -1012,7 +1012,7 @@ class TeknofestDualDroppingMission:
             # Indikator HUD PAUSED di video viewport
             cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
             cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 140, 255), 1)
-            cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED) [Tekan CTRL untuk Mengaktifkan]",
+            cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED)",
                         (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
 
             # Tetap update counter frame & rekam jika [R] aktif
@@ -1243,7 +1243,7 @@ class TeknofestDualDroppingMission:
         # Title & Status Dot
         dot_c = (0, 255, 120) if det_on else (0, 140, 255)
         cv2.circle(canvas, (p_x + 22, y_pos + 18), 5, dot_c, -1)
-        status_txt = "DETEKSI & DROP: AKTIF [CTRL]" if det_on else "DETEKSI & DROP: PAUSED [CTRL]"
+        status_txt = "DETEKSI & DROP: AKTIF" if det_on else "DETEKSI & DROP: PAUSED"
         status_col = (0, 255, 180) if det_on else (0, 180, 255)
         cv2.putText(canvas, status_txt, (p_x + 34, y_pos + 22), cv2.FONT_HERSHEY_DUPLEX, 0.44, status_col, 1, cv2.LINE_AA)
 
@@ -1262,7 +1262,7 @@ class TeknofestDualDroppingMission:
         self.buttons.append({
             "name": "TOGGLE_DETECTION",
             "rect": (p_x + 10, y_pos, panel_w - 20, card_h),
-            "label": "[CTRL] TOGGLE DETEKSI",
+            "label": "TOGGLE DETEKSI & DROP",
             "bg": card_bg,
             "fg": status_col
         })
@@ -1341,8 +1341,8 @@ class TeknofestDualDroppingMission:
         btn_w = panel_w - 20
         spacing = 33
 
-        # Tombol 1: Manual Drop Merah
-        b1 = {"name": "DROP_RED", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[1] MANUAL DROP MERAH", "bg": (0, 0, 160), "fg": (255, 255, 255)}
+        # Tombol 1: Drop Merah
+        b1 = {"name": "DROP_RED", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[1] DROP MERAH", "bg": (0, 0, 160), "fg": (255, 255, 255)}
         self.buttons.append(b1)
         cv2.rectangle(canvas, (b1["rect"][0], b1["rect"][1]), (b1["rect"][0] + b1["rect"][2], b1["rect"][1] + b1["rect"][3]), b1["bg"], -1)
         cv2.rectangle(canvas, (b1["rect"][0], b1["rect"][1]), (b1["rect"][0] + b1["rect"][2], b1["rect"][1] + b1["rect"][3]), (255, 255, 255), 1)
@@ -1356,9 +1356,9 @@ class TeknofestDualDroppingMission:
         cv2.rectangle(canvas, (b2["rect"][0], b2["rect"][1]), (b2["rect"][0] + b2["rect"][2], b2["rect"][1] + b2["rect"][3]), (160, 160, 160), 1)
         cv2.putText(canvas, b2["label"], (b2["rect"][0] + 15, b2["rect"][1] + 19), cv2.FONT_HERSHEY_DUPLEX, 0.40, b2["fg"], 1, cv2.LINE_AA)
 
-        # Tombol 3: Manual Drop Biru
+        # Tombol 3: Drop Biru
         btn_y += spacing
-        b3 = {"name": "DROP_BLUE", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[3] MANUAL DROP BIRU", "bg": (160, 80, 0), "fg": (255, 255, 255)}
+        b3 = {"name": "DROP_BLUE", "rect": (p_x + 10, btn_y, btn_w, btn_h), "label": "[3] DROP BIRU", "bg": (160, 80, 0), "fg": (255, 255, 255)}
         self.buttons.append(b3)
         cv2.rectangle(canvas, (b3["rect"][0], b3["rect"][1]), (b3["rect"][0] + b3["rect"][2], b3["rect"][1] + b3["rect"][3]), b3["bg"], -1)
         cv2.rectangle(canvas, (b3["rect"][0], b3["rect"][1]), (b3["rect"][0] + b3["rect"][2], b3["rect"][1] + b3["rect"][3]), (255, 255, 255), 1)
@@ -1387,7 +1387,7 @@ class TeknofestDualDroppingMission:
         hud_bar[:] = (18, 18, 18)
 
         msg_c = self.bridge.msg_count if self.bridge else 0
-        det_s = "DETEKSI: AKTIF [CTRL]" if self.detection_active else "DETEKSI: PAUSED [CTRL]"
+        det_s = "DETEKSI: AKTIF" if self.detection_active else "DETEKSI: PAUSED"
         enh_status = "ON" if self.enhancer.enabled else "OFF"
         model_name = Path(self.model_path).name
         alt_val = f"{self.bridge.relative_alt:.1f}m" if self.bridge else "N/A"
@@ -1415,7 +1415,7 @@ class TeknofestDualDroppingMission:
                     if name == "TOGGLE_DETECTION":
                         self.detection_active = not self.detection_active
                         st = "AKTIF" if self.detection_active else "NONAKTIF (PAUSED)"
-                        self.status_banner = f">> Deteksi & Auto-Drop: {st} [CTRL]"
+                        self.status_banner = f">> Deteksi & Auto-Drop: {st}"
                         self.status_timer = time.time() + 2.5
                     elif name == "DROP_RED":
                         self.trigger_drop_red("KLIK TOMBOL GUI")
@@ -1444,15 +1444,15 @@ class TeknofestDualDroppingMission:
         print("\n" + "=" * 65)
         print(" SISTEM AUTONOMI DUAL DROPPING TEKNOFEST (DIRECT / NO SAFEGUARD):")
         det_st = "AKTIF" if self.detection_active else "NONAKTIF"
-        print(f"  -> Deteksi & Auto-Drop : [{det_st}] (Tekan CTRL utk Pause/Resume)")
+        print(f"  -> Deteksi & Auto-Drop : [{det_st}]")
         print(f"  -> Video Enhancer      : {'[AKTIF (Clean V2)]' if self.enhancer.enabled else '[NONAKTIF / RAW (Tekan SPACE utk aktifkan)]'}")
         print(f"  -> Mode Tombol Samping : {MOUSE_SIDE_BUTTON_MODE} (Cross-Drop Sesuai Regulasi)")
         print("  [CTRL]              : Toggle Deteksi & Auto-Dropping ON/OFF")
-        print("  [Side Btn Atas]     : Manual Drop Merah Square (Forward Thumb Btn)")
-        print("  [Side Btn Bawah]    : Manual Drop Biru Square (Back Thumb Btn)")
-        print("  [1]                 : Trigger Manual Drop Merah (Servo 7 -> Drop PWM)")
+        print("  [Side Btn Atas]     : Drop Merah Square (Forward Thumb Btn)")
+        print("  [Side Btn Bawah]    : Drop Biru Square (Back Thumb Btn)")
+        print("  [1]                 : Trigger Drop Merah (Servo 7 -> Drop PWM)")
         print("  [2]                 : Reset Servo Merah (Servo 7 -> Start PWM)")
-        print("  [3]                 : Trigger Manual Drop Biru (Servo 8 -> Drop PWM)")
+        print("  [3]                 : Trigger Drop Biru (Servo 8 -> Drop PWM)")
         print("  [4]                 : Reset Servo Biru (Servo 8 -> Start PWM)")
         print("  [X]                 : Reset Semua Servo ke Standby")
         print("  [R]                 : Toggle Rekam Video Full (Mulai / Stop Rekam)")
@@ -1480,7 +1480,7 @@ class TeknofestDualDroppingMission:
                         if ctrl_down and not last_ctrl_state:
                             self.detection_active = not self.detection_active
                             st = "AKTIF" if self.detection_active else "NONAKTIF (PAUSED)"
-                            self.status_banner = f">> Deteksi & Auto-Drop: {st} [CTRL]"
+                            self.status_banner = f">> Deteksi & Auto-Drop: {st}"
                             self.status_timer = time.time() + 3.0
                             print(f"\n[CONTROL] Deteksi & Auto-Dropping di-toggle: {st}")
                         last_ctrl_state = ctrl_down
