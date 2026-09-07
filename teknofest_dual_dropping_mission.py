@@ -138,7 +138,7 @@ def normalize_waypoints(wps):
 # -- YOLO & VISION CONFIGURATION
 YOLO_MODEL_PATH = "v1main.onnx"
 YOLO_INPUT_SIZE = 640
-YOLO_CONF_THRESHOLD = 0.50     # Minimal Confidence 50% (0.50)
+YOLO_CONF_THRESHOLD = 0.85     # Minimal Confidence 85% (0.85)
 MIN_CONSECUTIVE_FRAMES = 2     # Minimal 2 frame berturut-turut terdeteksi (Anti-Glitch)
 
 # -- HSV COLOR GUARD FILTER
@@ -785,7 +785,7 @@ class TeknofestDualDroppingMission:
         # UI & Buttons
         self.buttons = []
         self.detection_active = AUTO_DETECTION_DEFAULT  # Master Toggle Deteksi & Dropping [CTRL]
-        self.status_banner = "SISTEM SIAP: Deteksi & Drop [AKTIF]" if self.detection_active else "SISTEM SIAP: Deteksi & Drop [PAUSED]"
+        self.status_banner = "SISTEM SIAP: Deteksi & Drop [AKTIF]" if self.detection_active else "SISTEM SIAP: Deteksi & Drop [STANDBY]"
         self.status_timer = time.time() + 4.0
 
         # Video Recorder & Detection Proof Logger
@@ -811,7 +811,12 @@ class TeknofestDualDroppingMission:
 
         print(f"[YOLO] Memuat model ONNX: {model_path}...")
         try:
-            self.yolo_session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+            # Force GPU execution (CUDA / DirectML) dengan fallback otomatis ke CPU
+            available_p = ort.get_available_providers()
+            gpu_providers = [p for p in ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"] if p in available_p]
+            if not gpu_providers:
+                gpu_providers = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
+            self.yolo_session = ort.InferenceSession(str(model_path), providers=gpu_providers)
             self.yolo_input_name = self.yolo_session.get_inputs()[0].name
             meta = self.yolo_session.get_modelmeta().custom_metadata_map
             if "names" in meta:
@@ -819,10 +824,22 @@ class TeknofestDualDroppingMission:
                 self.yolo_names = ast.literal_eval(meta["names"])
             else:
                 self.yolo_names = {0: "square_blue", 1: "square_red"}
-            print(f"[YOLO] Model ONNX Siap: '{model_path.name}' | Kelas: {self.yolo_names}")
+            print(f"[YOLO] Model ONNX Siap (GPU/Hardware Accel): '{model_path.name}' | Providers: {self.yolo_session.get_providers()} | Kelas: {self.yolo_names}")
         except Exception as e:
-            print(f"[YOLO ERROR] Gagal memuat model '{model_path}': {e}")
-            sys.exit(1)
+            print(f"[YOLO GPU Warning] Gagal inisialisasi GPU provider ({e}), mencoba fallback CPU...")
+            try:
+                self.yolo_session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+                self.yolo_input_name = self.yolo_session.get_inputs()[0].name
+                meta = self.yolo_session.get_modelmeta().custom_metadata_map
+                if "names" in meta:
+                    import ast
+                    self.yolo_names = ast.literal_eval(meta["names"])
+                else:
+                    self.yolo_names = {0: "square_blue", 1: "square_red"}
+                print(f"[YOLO] Model ONNX Siap di CPU: '{model_path.name}' | Kelas: {self.yolo_names}")
+            except Exception as e2:
+                print(f"[YOLO ERROR] Gagal memuat model '{model_path}': {e2}")
+                sys.exit(1)
 
     def start_camera(self):
         # Deteksi apakah camera_index berupa string path file video atau integer index kamera
@@ -1100,11 +1117,6 @@ class TeknofestDualDroppingMission:
                 self.frame_counter += 1
                 if self.recorder.is_recording:
                     self.recorder.write(frame)
-                if not self.detection_active:
-                    cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
-                    cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 140, 255), 1)
-                    cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED)",
-                                (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
                 self.proc_ms = (time.time() - t_start) * 1000.0
                 return frame
 
@@ -1176,10 +1188,7 @@ class TeknofestDualDroppingMission:
                 cv2.line(frame, (x2, y2), (x2, y2 - d), (255, 255, 255), 2)
                 cv2.circle(frame, center, 4, (0, 255, 255), -1)
 
-                if self.detection_active:
-                    tag = f"[VALID] SQUARE_BLUE {conf * 100:.0f}% -> DROP MERAH"
-                else:
-                    tag = f"[PAUSED] SQUARE_BLUE {conf * 100:.0f}% (NO DROP)"
+                tag = f"[VALID] SQUARE_BLUE {conf * 100:.0f}% -> DROP MERAH"
                 cv2.putText(frame, tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.52, color, 1, cv2.LINE_AA)
 
                 if detected_blue is None or conf > detected_blue["conf"]:
@@ -1201,10 +1210,7 @@ class TeknofestDualDroppingMission:
                 cv2.line(frame, (x2, y2), (x2, y2 - d), (255, 255, 255), 2)
                 cv2.circle(frame, center, 4, (0, 255, 255), -1)
 
-                if self.detection_active:
-                    tag = f"[VALID] SQUARE_RED {conf * 100:.0f}% -> DROP BIRU"
-                else:
-                    tag = f"[PAUSED] SQUARE_RED {conf * 100:.0f}% (NO DROP)"
+                tag = f"[VALID] SQUARE_RED {conf * 100:.0f}% -> DROP BIRU"
                 cv2.putText(frame, tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.52, color, 1, cv2.LINE_AA)
 
                 if detected_red is None or conf > detected_red["conf"]:
@@ -1236,13 +1242,6 @@ class TeknofestDualDroppingMission:
             self.consecutive_blue = 0
             self.consecutive_red = 0
 
-        # Indikator HUD PAUSED di video viewport bawah jika mode nonaktif
-        if not self.detection_active:
-            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
-            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 140, 255), 1)
-            cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED)",
-                        (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
-
         # 1. Update counter frame
         self.frame_counter += 1
 
@@ -1252,12 +1251,12 @@ class TeknofestDualDroppingMission:
 
         # 3. Simpan foto bukti deteksi ke folder detected_proof/<session_start>/
         rel_alt = self.bridge.relative_alt if self.bridge else 0.0
-        act_blue = "DROP MERAH" if self.detection_active else "PAUSED (NO DROP)"
+        act_blue = "DROP MERAH" if self.detection_active else "STANDBY"
         if detected_blue is not None:
             info = f"Alt:{rel_alt:.1f}m | SQUARE BLUE -> {act_blue}"
             self.proof_logger.log_detection(frame, "square_blue", detected_blue["conf"], self.frame_counter, info)
 
-        act_red = "DROP BIRU" if self.detection_active else "PAUSED (NO DROP)"
+        act_red = "DROP BIRU" if self.detection_active else "STANDBY"
         if detected_red is not None:
             info = f"Alt:{rel_alt:.1f}m | SQUARE RED -> {act_red}"
             self.proof_logger.log_detection(frame, "square_red", detected_red["conf"], self.frame_counter, info)
@@ -1329,7 +1328,7 @@ class TeknofestDualDroppingMission:
         # Title & Status Dot
         dot_c = (0, 255, 120) if det_on else (0, 140, 255)
         cv2.circle(canvas, (p_x + 22, y_pos + 18), 5, dot_c, -1)
-        status_txt = "DETEKSI & DROP: AKTIF" if det_on else "DETEKSI & DROP: PAUSED"
+        status_txt = "DETEKSI & DROP: AKTIF" if det_on else "DETEKSI & DROP: STANDBY"
         status_col = (0, 255, 180) if det_on else (0, 180, 255)
         cv2.putText(canvas, status_txt, (p_x + 34, y_pos + 22), cv2.FONT_HERSHEY_DUPLEX, 0.44, status_col, 1, cv2.LINE_AA)
 
@@ -1473,7 +1472,7 @@ class TeknofestDualDroppingMission:
         hud_bar[:] = (18, 18, 18)
 
         msg_c = self.bridge.msg_count if self.bridge else 0
-        det_s = "DETEKSI: AKTIF" if self.detection_active else "DETEKSI: PAUSED"
+        det_s = "DETEKSI: AKTIF" if self.detection_active else "DETEKSI: STANDBY"
         enh_status = "ON" if self.enhancer.enabled else "OFF"
         model_name = Path(self.model_path).name
         alt_val = f"{self.bridge.relative_alt:.1f}m" if self.bridge else "N/A"
@@ -1500,7 +1499,7 @@ class TeknofestDualDroppingMission:
                     name = b["name"]
                     if name == "TOGGLE_DETECTION":
                         self.detection_active = not self.detection_active
-                        st = "AKTIF" if self.detection_active else "NONAKTIF (PAUSED)"
+                        st = "AKTIF" if self.detection_active else "STANDBY"
                         self.status_banner = f">> Deteksi & Auto-Drop: {st}"
                         self.status_timer = time.time() + 2.5
                     elif name == "DROP_RED":
@@ -1565,7 +1564,7 @@ class TeknofestDualDroppingMission:
                         ctrl_down = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
                         if ctrl_down and not last_ctrl_state:
                             self.detection_active = not self.detection_active
-                            st = "AKTIF" if self.detection_active else "NONAKTIF (PAUSED)"
+                            st = "AKTIF" if self.detection_active else "STANDBY"
                             self.status_banner = f">> Deteksi & Auto-Drop: {st}"
                             self.status_timer = time.time() + 3.0
                             print(f"\n[CONTROL] Deteksi & Auto-Dropping di-toggle: {st}")
