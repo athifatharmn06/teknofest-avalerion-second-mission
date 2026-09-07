@@ -138,7 +138,7 @@ def normalize_waypoints(wps):
 # -- YOLO & VISION CONFIGURATION
 YOLO_MODEL_PATH = "v1main.onnx"
 YOLO_INPUT_SIZE = 640
-YOLO_CONF_THRESHOLD = 0.80     # Minimal Confidence 80% (0.80)
+YOLO_CONF_THRESHOLD = 0.70     # Minimal Confidence 70% (0.70)
 MIN_CONSECUTIVE_FRAMES = 2     # Minimal 2 frame berturut-turut terdeteksi (Anti-Glitch)
 
 # -- HSV COLOR GUARD FILTER
@@ -1011,25 +1011,6 @@ class TeknofestDualDroppingMission:
 
         h, w = frame.shape[:2]
 
-        # 0. Master Switch [CTRL]: Jika Deteksi & Auto-Dropping NONAKTIF / PAUSED
-        if not self.detection_active:
-            self.consecutive_blue = 0
-            self.consecutive_red = 0
-
-            # Indikator HUD PAUSED di video viewport
-            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
-            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 140, 255), 1)
-            cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED)",
-                        (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
-
-            # Tetap update counter frame & rekam jika [R] aktif
-            self.frame_counter += 1
-            if self.recorder.is_recording:
-                self.recorder.write(frame)
-
-            self.proc_ms = (time.time() - t_start) * 1000.0
-            return frame
-
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         # Pre-check Color Guard
@@ -1044,10 +1025,15 @@ class TeknofestDualDroppingMission:
                 self.frame_counter += 1
                 if self.recorder.is_recording:
                     self.recorder.write(frame)
+                if not self.detection_active:
+                    cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
+                    cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 140, 255), 1)
+                    cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED)",
+                                (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
                 self.proc_ms = (time.time() - t_start) * 1000.0
                 return frame
 
-        # YOLO Inference
+        # YOLO Inference (Tetap dijalankan agar bounding box selalu tampil di layar)
         tensor, scale, pad_x, pad_y = preprocess_yolo(frame)
         raw_preds = self.yolo_session.run(None, {self.yolo_input_name: tensor})[0][0]
 
@@ -1117,7 +1103,10 @@ class TeknofestDualDroppingMission:
                 cv2.line(frame, (x2, y2), (x2, y2 - d), (255, 255, 255), 2)
                 cv2.circle(frame, center, 4, (0, 255, 255), -1)
 
-                tag = f"[VALID] SQUARE_BLUE {conf * 100:.0f}% -> DROP MERAH"
+                if self.detection_active:
+                    tag = f"[VALID] SQUARE_BLUE {conf * 100:.0f}% -> DROP MERAH"
+                else:
+                    tag = f"[PAUSED] SQUARE_BLUE {conf * 100:.0f}% (NO DROP)"
                 cv2.putText(frame, tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.52, color, 1, cv2.LINE_AA)
 
                 if detected_blue is None or conf > detected_blue["conf"]:
@@ -1139,32 +1128,47 @@ class TeknofestDualDroppingMission:
                 cv2.line(frame, (x2, y2), (x2, y2 - d), (255, 255, 255), 2)
                 cv2.circle(frame, center, 4, (0, 255, 255), -1)
 
-                tag = f"[VALID] SQUARE_RED {conf * 100:.0f}% -> DROP BIRU"
+                if self.detection_active:
+                    tag = f"[VALID] SQUARE_RED {conf * 100:.0f}% -> DROP BIRU"
+                else:
+                    tag = f"[PAUSED] SQUARE_RED {conf * 100:.0f}% (NO DROP)"
                 cv2.putText(frame, tag, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_DUPLEX, 0.52, color, 1, cv2.LINE_AA)
 
                 if detected_red is None or conf > detected_red["conf"]:
                     detected_red = {"conf": conf, "box": (x1, y1, x2, y2), "center": center}
 
         # ----------------------------------------------------------------------
-        # CROSS-DROP EXECUTION (LANGSUNG EKSEKUSI - TANPA SAFEGUARD BLOCKING)
+        # CROSS-DROP EXECUTION (HANYA DIEKSEKUSI JIKA MASTER DETEKSI AKTIF)
         # ----------------------------------------------------------------------
-        # 1. Target Square Blue -> Trigger Payload Merah (Servo 7)
-        if detected_blue is not None:
-            self.consecutive_blue += 1
-            self.last_blue_info = detected_blue
-            if self.consecutive_blue >= MIN_CONSECUTIVE_FRAMES and not self.payload_red_dropped:
-                self.trigger_drop_red(f"Target SQUARE BLUE (Conf: {detected_blue['conf'] * 100:.0f}%) [DIRECT ACTION]")
-        else:
-            self.consecutive_blue = 0
+        if self.detection_active:
+            # 1. Target Square Blue -> Trigger Payload Merah (Servo 7)
+            if detected_blue is not None:
+                self.consecutive_blue += 1
+                self.last_blue_info = detected_blue
+                if self.consecutive_blue >= MIN_CONSECUTIVE_FRAMES and not self.payload_red_dropped:
+                    self.trigger_drop_red(f"Target SQUARE BLUE (Conf: {detected_blue['conf'] * 100:.0f}%) [DIRECT ACTION]")
+            else:
+                self.consecutive_blue = 0
 
-        # 2. Target Square Red -> Trigger Payload Biru (Servo 8)
-        if detected_red is not None:
-            self.consecutive_red += 1
-            self.last_red_info = detected_red
-            if self.consecutive_red >= MIN_CONSECUTIVE_FRAMES and not self.payload_blue_dropped:
-                self.trigger_drop_blue(f"Target SQUARE RED (Conf: {detected_red['conf'] * 100:.0f}%) [DIRECT ACTION]")
+            # 2. Target Square Red -> Trigger Payload Biru (Servo 8)
+            if detected_red is not None:
+                self.consecutive_red += 1
+                self.last_red_info = detected_red
+                if self.consecutive_red >= MIN_CONSECUTIVE_FRAMES and not self.payload_blue_dropped:
+                    self.trigger_drop_blue(f"Target SQUARE RED (Conf: {detected_red['conf'] * 100:.0f}%) [DIRECT ACTION]")
+            else:
+                self.consecutive_red = 0
         else:
+            # Status Deteksi & Auto-Dropping NONAKTIF: JANGAN kirim command apapun!
+            self.consecutive_blue = 0
             self.consecutive_red = 0
+
+        # Indikator HUD PAUSED di video viewport bawah jika mode nonaktif
+        if not self.detection_active:
+            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (20, 20, 20), -1)
+            cv2.rectangle(frame, (10, h - 38), (w - 10, h - 10), (0, 140, 255), 1)
+            cv2.putText(frame, "DETEKSI & DROP: NONAKTIF (PAUSED)",
+                        (20, h - 18), cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
 
         # 1. Update counter frame
         self.frame_counter += 1
@@ -1173,14 +1177,16 @@ class TeknofestDualDroppingMission:
         if self.recorder.is_recording:
             self.recorder.write(frame)
 
-        # 3. Simpan foto bukti deteksi ke folder detected_proof/<session_start>/ tanpa jeda
+        # 3. Simpan foto bukti deteksi ke folder detected_proof/<session_start>/
         rel_alt = self.bridge.relative_alt if self.bridge else 0.0
+        act_blue = "DROP MERAH" if self.detection_active else "PAUSED (NO DROP)"
         if detected_blue is not None:
-            info = f"Alt:{rel_alt:.1f}m | VALID TARGET -> DROP MERAH"
+            info = f"Alt:{rel_alt:.1f}m | SQUARE BLUE -> {act_blue}"
             self.proof_logger.log_detection(frame, "square_blue", detected_blue["conf"], self.frame_counter, info)
 
+        act_red = "DROP BIRU" if self.detection_active else "PAUSED (NO DROP)"
         if detected_red is not None:
-            info = f"Alt:{rel_alt:.1f}m | VALID TARGET -> DROP BIRU"
+            info = f"Alt:{rel_alt:.1f}m | SQUARE RED -> {act_red}"
             self.proof_logger.log_detection(frame, "square_red", detected_red["conf"], self.frame_counter, info)
 
         self.proc_ms = (time.time() - t_start) * 1000.0
