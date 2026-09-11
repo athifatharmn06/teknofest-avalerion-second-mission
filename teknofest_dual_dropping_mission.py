@@ -133,7 +133,7 @@ def normalize_waypoints(wps):
     return [3]
 
 # -- YOLO & VISION CONFIGURATION
-YOLO_MODEL_PATH = "v1mainlarge.onnx"
+YOLO_MODEL_PATH = "v2main.onnx"
 YOLO_INPUT_SIZE = 640
 YOLO_CONF_THRESHOLD = 0.85     # Minimal Confidence 85% (0.85)
 MIN_CONSECUTIVE_FRAMES = 2     # Minimal 2 frame berturut-turut terdeteksi (Anti-Glitch)

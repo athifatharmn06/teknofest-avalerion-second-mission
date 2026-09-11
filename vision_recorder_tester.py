@@ -59,7 +59,7 @@ import onnxruntime as ort
 # ==============================================================================
 # KONFIGURASI GLOBAL
 # ==============================================================================
-YOLO_MODEL_PATH = "v1main.onnx"
+YOLO_MODEL_PATH = "v2main.onnx"
 YOLO_INPUT_SIZE = 640
 DEFAULT_CONF_THRESHOLD = 0.50     # Default 50%
 
